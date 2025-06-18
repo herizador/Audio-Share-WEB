@@ -1,0 +1,655 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>💗 Escuchando tu Corazón</title>
+    <meta name="description" content="Una app romántica para recibir audio en tiempo real">
+    <meta name="theme-color" content="#FFB6C1">
+    
+    <!-- PWA Manifest -->
+    <link rel="manifest" href="data:application/json;base64,eyJuYW1lIjoiRXNjdWNoYW5kbyB0dSBDb3Jhem9uIiwic2hvcnRfbmFtZSI6IkF1ZGlvIEFtb3IiLCJzdGFydF91cmwiOiIuLyIsImRpc3BsYXkiOiJzdGFuZGFsb25lIiwiYmFja2dyb3VuZF9jb2xvciI6IiNGRkY1RjgiLCJ0aGVtZV9jb2xvciI6IiNGRkI2QzEiLCJpY29ucyI6W3sic3JjIjoidGVtcC1pY29uLTEyOC5wbmciLCJzaXplcyI6IjEyOHgxMjgiLCJ0eXBlIjoiaW1hZ2UvcG5nIn0seyJzcmMiOiJ0ZW1wLWljb24tNTEyLnBuZyIsInNpemVzIjoiNTEyeDUxMiIsInR5cGUiOiJpbWFnZS9wbmcifV19">
+    
+    <!-- iOS specific meta tags -->
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="light-content">
+    <meta name="apple-mobile-web-app-title" content="💗 Audio Amor">
+    <link rel="apple-touch-icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' fill='%23FFB6C1'/><text y='50' x='50' text-anchor='middle' dominant-baseline='middle' font-size='50'>💗</text></svg>">
+    
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Quicksand:wght@300;400;500;600;700&display=swap');
+        
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Quicksand', sans-serif;
+            background: linear-gradient(135deg, #FFF5F8 0%, #FFE8ED 50%, #FFD6E1 100%);
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+            overflow: hidden;
+            position: relative;
+        }
+        
+        /* Floating hearts background */
+        .floating-hearts {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+            z-index: 1;
+        }
+        
+        .heart {
+            position: absolute;
+            font-size: 20px;
+            opacity: 0.3;
+            animation: float 8s infinite ease-in-out;
+        }
+        
+        @keyframes float {
+            0%, 100% { 
+                transform: translateY(100vh) rotate(0deg);
+                opacity: 0;
+            }
+            10% { opacity: 0.3; }
+            50% { 
+                transform: translateY(50vh) rotate(180deg);
+                opacity: 0.6;
+            }
+            90% { opacity: 0.3; }
+        }
+        
+        /* Main container */
+        .app-container {
+            background: rgba(255, 255, 255, 0.9);
+            backdrop-filter: blur(20px);
+            border-radius: 30px;
+            padding: 40px 30px;
+            box-shadow: 0 20px 60px rgba(255, 182, 193, 0.3);
+            text-align: center;
+            max-width: 400px;
+            width: 100%;
+            position: relative;
+            z-index: 10;
+            border: 2px solid rgba(255, 182, 193, 0.2);
+        }
+        
+        .app-title {
+            font-size: 28px;
+            font-weight: 600;
+            color: #E91E63;
+            margin-bottom: 10px;
+            text-shadow: 0 2px 10px rgba(233, 30, 99, 0.3);
+        }
+        
+        .app-subtitle {
+            font-size: 16px;
+            color: #AD1457;
+            margin-bottom: 30px;
+            opacity: 0.8;
+        }
+        
+        /* Connection section */
+        .connection-section {
+            margin-bottom: 40px;
+        }
+        
+        .url-input {
+            width: 100%;
+            padding: 15px 20px;
+            border: 2px solid #FFB6C1;
+            border-radius: 25px;
+            font-size: 16px;
+            font-family: 'Quicksand', sans-serif;
+            font-weight: 500;
+            background: rgba(255, 245, 248, 0.8);
+            color: #AD1457;
+            margin-bottom: 20px;
+            transition: all 0.3s ease;
+        }
+        
+        .url-input:focus {
+            outline: none;
+            border-color: #E91E63;
+            box-shadow: 0 0 20px rgba(233, 30, 99, 0.2);
+            transform: translateY(-2px);
+        }
+        
+        .url-input::placeholder {
+            color: #F48FB1;
+        }
+        
+        .connect-btn {
+            background: linear-gradient(135deg, #E91E63, #AD1457);
+            color: white;
+            border: none;
+            padding: 15px 30px;
+            border-radius: 25px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            box-shadow: 0 10px 30px rgba(233, 30, 99, 0.3);
+            font-family: 'Quicksand', sans-serif;
+        }
+        
+        .connect-btn:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 15px 40px rgba(233, 30, 99, 0.4);
+        }
+        
+        .connect-btn:active {
+            transform: translateY(-1px);
+        }
+        
+        .connect-btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            transform: none;
+        }
+        
+        /* Status section */
+        .status-section {
+            margin-bottom: 40px;
+            min-height: 80px;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+        }
+        
+        .status-message {
+            font-size: 18px;
+            font-weight: 500;
+            margin-bottom: 10px;
+            min-height: 25px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+        }
+        
+        .status-waiting {
+            color: #9C27B0;
+        }
+        
+        .status-connecting {
+            color: #FF9800;
+        }
+        
+        .status-playing {
+            color: #4CAF50;
+            animation: pulse 2s infinite;
+        }
+        
+        .status-error {
+            color: #F44336;
+        }
+        
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.7; }
+        }
+        
+        /* Audio visualizer */
+        .audio-visualizer {
+            display: none;
+            align-items: center;
+            justify-content: center;
+            gap: 3px;
+            margin-top: 15px;
+        }
+        
+        .audio-visualizer.active {
+            display: flex;
+        }
+        
+        .bar {
+            width: 4px;
+            height: 20px;
+            background: linear-gradient(to top, #E91E63, #F48FB1);
+            border-radius: 2px;
+            animation: wave 1.5s ease-in-out infinite;
+        }
+        
+        .bar:nth-child(2) { animation-delay: 0.1s; }
+        .bar:nth-child(3) { animation-delay: 0.2s; }
+        .bar:nth-child(4) { animation-delay: 0.3s; }
+        .bar:nth-child(5) { animation-delay: 0.4s; }
+        .bar:nth-child(6) { animation-delay: 0.3s; }
+        .bar:nth-child(7) { animation-delay: 0.2s; }
+        .bar:nth-child(8) { animation-delay: 0.1s; }
+        
+        @keyframes wave {
+            0%, 100% { height: 20px; }
+            50% { height: 40px; }
+        }
+        
+        /* My Melody Avatar */
+        .avatar-container {
+            position: relative;
+            margin-top: 20px;
+        }
+        
+        .avatar {
+            width: 120px;
+            height: 120px;
+            margin: 0 auto;
+            position: relative;
+            animation: breathe 3s ease-in-out infinite;
+        }
+        
+        @keyframes breathe {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.05); }
+        }
+        
+        .avatar.listening {
+            animation: dance 2s ease-in-out infinite;
+        }
+        
+        @keyframes dance {
+            0%, 100% { transform: scale(1) rotate(0deg); }
+            25% { transform: scale(1.1) rotate(-2deg); }
+            75% { transform: scale(1.1) rotate(2deg); }
+        }
+        
+        /* My Melody SVG */
+        .melody {
+            width: 100%;
+            height: 100%;
+            filter: drop-shadow(0 10px 20px rgba(255, 182, 193, 0.3));
+        }
+        
+        /* Hidden audio element */
+        #audioPlayer {
+            display: none;
+        }
+        
+        /* Responsive design */
+        @media (max-width: 480px) {
+            .app-container {
+                padding: 30px 20px;
+                margin: 10px;
+            }
+            
+            .app-title {
+                font-size: 24px;
+            }
+            
+            .url-input {
+                font-size: 14px;
+            }
+            
+            .avatar {
+                width: 100px;
+                height: 100px;
+            }
+        }
+        
+        /* Loading animation */
+        .loading-dots {
+            display: inline-block;
+        }
+        
+        .loading-dots::after {
+            content: '';
+            animation: dots 2s infinite;
+        }
+        
+        @keyframes dots {
+            0%, 20% { content: ''; }
+            40% { content: '.'; }
+            60% { content: '..'; }
+            80%, 100% { content: '...'; }
+        }
+    </style>
+</head>
+<body>
+    <!-- Floating hearts background -->
+    <div class="floating-hearts" id="floatingHearts"></div>
+    
+    <!-- Main app container -->
+    <div class="app-container">
+        <h1 class="app-title">💗 Escuchando tu Corazón</h1>
+        <p class="app-subtitle">Una conexión de amor en tiempo real</p>
+        
+        <!-- Connection section -->
+        <div class="connection-section">
+            <input 
+                type="text" 
+                class="url-input" 
+                id="streamUrl" 
+                placeholder="http://192.168.1.100:8080/stream"
+                value="http://192.168.1.100:8080/stream"
+            >
+            <button class="connect-btn" id="connectBtn">
+                Conectar con tu Amor 💕
+            </button>
+        </div>
+        
+        <!-- Status section -->
+        <div class="status-section">
+            <div class="status-message status-waiting" id="statusMessage">
+                💝 Lista para recibir tu amor
+            </div>
+            
+            <!-- Audio visualizer -->
+            <div class="audio-visualizer" id="audioVisualizer">
+                <div class="bar"></div>
+                <div class="bar"></div>
+                <div class="bar"></div>
+                <div class="bar"></div>
+                <div class="bar"></div>
+                <div class="bar"></div>
+                <div class="bar"></div>
+                <div class="bar"></div>
+            </div>
+        </div>
+        
+        <!-- My Melody Avatar -->
+        <div class="avatar-container">
+            <div class="avatar" id="avatar">
+                <svg class="melody" viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg">
+                    <!-- Body -->
+                    <ellipse cx="100" cy="140" rx="45" ry="35" fill="#FFF0F5" stroke="#FFB6C1" stroke-width="2"/>
+                    
+                    <!-- Head -->
+                    <circle cx="100" cy="85" r="40" fill="#FFF0F5" stroke="#FFB6C1" stroke-width="2"/>
+                    
+                    <!-- Ears -->
+                    <ellipse cx="75" cy="55" rx="12" ry="20" fill="#FFF0F5" stroke="#FFB6C1" stroke-width="2" transform="rotate(-20 75 55)"/>
+                    <ellipse cx="125" cy="55" rx="12" ry="20" fill="#FFF0F5" stroke="#FFB6C1" stroke-width="2" transform="rotate(20 125 55)"/>
+                    
+                    <!-- Inner ears -->
+                    <ellipse cx="75" cy="55" rx="6" ry="12" fill="#FFE8ED" transform="rotate(-20 75 55)"/>
+                    <ellipse cx="125" cy="55" rx="6" ry="12" fill="#FFE8ED" transform="rotate(20 125 55)"/>
+                    
+                    <!-- Eyes -->
+                    <circle cx="88" cy="78" r="3" fill="#333"/>
+                    <circle cx="112" cy="78" r="3" fill="#333"/>
+                    <circle cx="89" cy="76" r="1" fill="#FFF"/>
+                    <circle cx="113" cy="76" r="1" fill="#FFF"/>
+                    
+                    <!-- Blush -->
+                    <ellipse cx="68" cy="85" rx="8" ry="5" fill="#FFB6C1" opacity="0.6"/>
+                    <ellipse cx="132" cy="85" rx="8" ry="5" fill="#FFB6C1" opacity="0.6"/>
+                    
+                    <!-- Nose -->
+                    <circle cx="100" cy="88" r="1.5" fill="#FFB6C1"/>
+                    
+                    <!-- Mouth -->
+                    <path d="M 95 95 Q 100 100 105 95" stroke="#E91E63" stroke-width="2" fill="none" stroke-linecap="round"/>
+                    
+                    <!-- Hood -->
+                    <path d="M 65 45 Q 100 25 135 45 Q 130 35 125 30 Q 100 15 75 30 Q 70 35 65 45" fill="#FFB6C1"/>
+                    <path d="M 65 45 Q 100 25 135 45" stroke="#E91E63" stroke-width="2" fill="none"/>
+                    
+                    <!-- Hood ears -->
+                    <ellipse cx="85" cy="32" rx="8" ry="12" fill="#FFB6C1"/>
+                    <ellipse cx="115" cy="32" rx="8" ry="12" fill="#FFB6C1"/>
+                    <ellipse cx="85" cy="32" rx="4" ry="6" fill="#FFE8ED"/>
+                    <ellipse cx="115" cy="32" rx="4" ry="6" fill="#FFE8ED"/>
+                    
+                    <!-- Arms -->
+                    <ellipse cx="65" cy="130" rx="15" ry="8" fill="#FFF0F5" stroke="#FFB6C1" stroke-width="2"/>
+                    <ellipse cx="135" cy="130" rx="15" ry="8" fill="#FFF0F5" stroke="#FFB6C1" stroke-width="2"/>
+                    
+                    <!-- Heart on chest -->
+                    <path d="M 100 115 C 95 110, 85 110, 85 120 C 85 125, 95 135, 100 140 C 105 135, 115 125, 115 120 C 115 110, 105 110, 100 115 Z" fill="#E91E63" opacity="0.8"/>
+                </svg>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Hidden audio player -->
+    <audio id="audioPlayer" preload="none" crossorigin="anonymous"></audio>
+    
+    <script>
+        class RomanticAudioReceiver {
+            constructor() {
+                this.audioPlayer = document.getElementById('audioPlayer');
+                this.statusMessage = document.getElementById('statusMessage');
+                this.connectBtn = document.getElementById('connectBtn');
+                this.streamUrl = document.getElementById('streamUrl');
+                this.avatar = document.getElementById('avatar');
+                this.audioVisualizer = document.getElementById('audioVisualizer');
+                
+                this.isConnected = false;
+                this.isPlaying = false;
+                
+                this.init();
+                this.createFloatingHearts();
+            }
+            
+            init() {
+                // Event listeners
+                this.connectBtn.addEventListener('click', () => this.toggleConnection());
+                this.streamUrl.addEventListener('keypress', (e) => {
+                    if (e.key === 'Enter') this.toggleConnection();
+                });
+                
+                // Audio events
+                this.audioPlayer.addEventListener('loadstart', () => this.onLoadStart());
+                this.audioPlayer.addEventListener('canplay', () => this.onCanPlay());
+                this.audioPlayer.addEventListener('playing', () => this.onPlaying());
+                this.audioPlayer.addEventListener('pause', () => this.onPause());
+                this.audioPlayer.addEventListener('error', (e) => this.onError(e));
+                this.audioPlayer.addEventListener('ended', () => this.onEnded());
+                
+                // PWA installation
+                this.registerServiceWorker();
+            }
+            
+            createFloatingHearts() {
+                const heartsContainer = document.getElementById('floatingHearts');
+                const hearts = ['💗', '💖', '💕', '💓', '💝', '🌸', '🌺', '✨'];
+                
+                setInterval(() => {
+                    if (Math.random() < 0.3) {
+                        const heart = document.createElement('div');
+                        heart.className = 'heart';
+                        heart.textContent = hearts[Math.floor(Math.random() * hearts.length)];
+                        heart.style.left = Math.random() * 100 + '%';
+                        heart.style.animationDuration = (Math.random() * 4 + 6) + 's';
+                        heart.style.fontSize = (Math.random() * 10 + 15) + 'px';
+                        
+                        heartsContainer.appendChild(heart);
+                        
+                        setTimeout(() => {
+                            if (heartsContainer.contains(heart)) {
+                                heartsContainer.removeChild(heart);
+                            }
+                        }, 10000);
+                    }
+                }, 2000);
+            }
+            
+            async toggleConnection() {
+                if (this.isConnected) {
+                    this.disconnect();
+                } else {
+                    await this.connect();
+                }
+            }
+            
+            async connect() {
+                const url = this.streamUrl.value.trim();
+                if (!url) {
+                    this.showStatus('❌ Por favor ingresa una URL válida', 'error');
+                    return;
+                }
+                
+                try {
+                    this.connectBtn.disabled = true;
+                    this.showStatus('🔄 Conectando con tu amor<span class="loading-dots"></span>', 'connecting');
+                    
+                    // Set audio source
+                    this.audioPlayer.src = url;
+                    this.audioPlayer.load();
+                    
+                    // Try to play
+                    const playPromise = this.audioPlayer.play();
+                    if (playPromise !== undefined) {
+                        await playPromise;
+                    }
+                    
+                } catch (error) {
+                    console.error('Connection error:', error);
+                    this.onError(error);
+                }
+            }
+            
+            disconnect() {
+                this.audioPlayer.pause();
+                this.audioPlayer.src = '';
+                this.isConnected = false;
+                this.isPlaying = false;
+                
+                this.connectBtn.textContent = 'Conectar con tu Amor 💕';
+                this.connectBtn.disabled = false;
+                this.showStatus('💝 Lista para recibir tu amor', 'waiting');
+                this.setAvatarState('waiting');
+                this.audioVisualizer.classList.remove('active');
+            }
+            
+            onLoadStart() {
+                this.showStatus('🔄 Preparando la conexión<span class="loading-dots"></span>', 'connecting');
+            }
+            
+            onCanPlay() {
+                this.isConnected = true;
+                this.connectBtn.textContent = 'Desconectar 💔';
+                this.connectBtn.disabled = false;
+            }
+            
+            onPlaying() {
+                this.isPlaying = true;
+                this.showStatus('🎶 Recibiendo tu amor...', 'playing');
+                this.setAvatarState('listening');
+                this.audioVisualizer.classList.add('active');
+            }
+            
+            onPause() {
+                if (this.isConnected) {
+                    this.isPlaying = false;
+                    this.showStatus('⏸️ Esperando más amor...', 'waiting');
+                    this.setAvatarState('waiting');
+                    this.audioVisualizer.classList.remove('active');
+                }
+            }
+            
+            onError(error) {
+                console.error('Audio error:', error);
+                this.isConnected = false;
+                this.connectBtn.textContent = 'Reintentar Conexión 🔄';
+                this.connectBtn.disabled = false;
+                this.showStatus('❌ No pude conectar con tu corazón', 'error');
+                this.setAvatarState('sad');
+                this.audioVisualizer.classList.remove('active');
+            }
+            
+            onEnded() {
+                this.showStatus('💔 Se perdió la conexión...', 'error');
+                this.setAvatarState('sad');
+                this.audioVisualizer.classList.remove('active');
+            }
+            
+            showStatus(message, type) {
+                this.statusMessage.innerHTML = message;
+                this.statusMessage.className = `status-message status-${type}`;
+            }
+            
+            setAvatarState(state) {
+                this.avatar.className = `avatar ${state}`;
+            }
+            
+            async registerServiceWorker() {
+                if ('serviceWorker' in navigator) {
+                    try {
+                        // Create a minimal service worker
+                        const swCode = `
+                            const CACHE_NAME = 'romantic-audio-v1';
+                            const urlsToCache = ['./'];
+                            
+                            self.addEventListener('install', event => {
+                                event.waitUntil(
+                                    caches.open(CACHE_NAME)
+                                        .then(cache => cache.addAll(urlsToCache))
+                                );
+                            });
+                            
+                            self.addEventListener('fetch', event => {
+                                event.respondWith(
+                                    caches.match(event.request)
+                                        .then(response => response || fetch(event.request))
+                                );
+                            });
+                        `;
+                        
+                        const blob = new Blob([swCode], { type: 'application/javascript' });
+                        const swUrl = URL.createObjectURL(blob);
+                        
+                        await navigator.serviceWorker.register(swUrl);
+                        console.log('Service Worker registered successfully');
+                    } catch (error) {
+                        console.log('Service Worker registration failed:', error);
+                    }
+                }
+            }
+        }
+        
+        // Initialize the app when DOM is loaded
+        document.addEventListener('DOMContentLoaded', () => {
+            new RomanticAudioReceiver();
+        });
+        
+        // Add to home screen prompt for PWA
+        let deferredPrompt;
+        window.addEventListener('beforeinstallprompt', (e) => {
+            e.preventDefault();
+            deferredPrompt = e;
+            
+            // Show custom install button if needed
+            setTimeout(() => {
+                if (deferredPrompt && !window.matchMedia('(display-mode: standalone)').matches) {
+                    const installMsg = document.createElement('div');
+                    installMsg.innerHTML = '💕 ¿Quieres agregar esta app a tu inicio?';
+                    installMsg.style.cssText = `
+                        position: fixed; top: 20px; left: 50%; transform: translateX(-50%);
+                        background: rgba(233, 30, 99, 0.9); color: white; padding: 10px 20px;
+                        border-radius: 20px; font-size: 14px; z-index: 1000;
+                        cursor: pointer; backdrop-filter: blur(10px);
+                    `;
+                    
+                    installMsg.addEventListener('click', async () => {
+                        if (deferredPrompt) {
+                            deferredPrompt.prompt();
+                            const { outcome } = await deferredPrompt.userChoice;
+                            deferredPrompt = null;
+                            installMsg.remove();
+                        }
+                    });
+                    
+                    document.body.appendChild(installMsg);
+                    
+                    setTimeout(() => {
+                        if (document.body.contains(installMsg)) {
+                            installMsg.remove();
+                        }
+                    }, 10000);
+                }
+            }, 5000);
+        });
+    </script>
+</body>
+</html>
