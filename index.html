@@ -417,176 +417,290 @@
     
     <script>
         class RomanticAudioReceiver {
-            constructor() {
-                this.audioPlayer = document.getElementById('audioPlayer');
-                this.statusMessage = document.getElementById('statusMessage');
-                this.connectBtn = document.getElementById('connectBtn');
-                this.streamUrl = document.getElementById('streamUrl');
-                this.avatar = document.getElementById('avatar');
-                this.audioVisualizer = document.getElementById('audioVisualizer');
+    constructor() {
+        this.audioPlayer = document.getElementById('audioPlayer'); // Esto ya no se usará para la reproducción directa
+        this.statusMessage = document.getElementById('statusMessage');
+        this.connectBtn = document.getElementById('connectBtn');
+        this.streamUrl = document.getElementById('streamUrl'); // Ahora será la IP del móvil
+        this.avatar = document.getElementById('avatar');
+        this.audioVisualizer = document.getElementById('audioVisualizer');
+        
+        this.isConnected = false;
+        this.isPlaying = false;
+        
+        // --- NUEVAS PROPIEDADES PARA WEB AUDIO API Y WEBSOCKET ---
+        this.websocket = null;
+        this.audioContext = null;
+        this.gainNode = null; // Para controlar el volumen (opcional)
+        this.audioQueue = []; // Cola para almacenar fragmentos de audio
+        this.isBuffering = false;
+        this.bufferThreshold = 5; // Número de buffers para empezar a reproducir
+        this.sampleRate = 44100; // DEBE COINCIDIR CON LA APP ANDROID
+        this.numChannels = 1; // 1 para MONO, 2 para STEREO (DEBE COINCIDIR)
+        this.bufferSize = 4096; // TAMAÑO DEL BUFFER DE BYTES RECIBIDO (DEBE COINCIDIR)
+
+        this.init();
+        this.createFloatingHearts();
+    }
+    
+    init() {
+        // Event listeners
+        this.connectBtn.addEventListener('click', () => this.toggleConnection());
+        this.streamUrl.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') this.toggleConnection();
+        });
+        
+        // PWA installation
+        this.registerServiceWorker();
+
+        // No es necesario añadir listeners al audioPlayer HTML, ya que no se usará para el stream.
+        // Los eventos onPlaying, onPause, onError, onEnded los controlarás manualmente con WebSockets/Web Audio.
+    }
+    
+    createFloatingHearts() {
+        const heartsContainer = document.getElementById('floatingHearts');
+        const hearts = ['💗', '💖', '💕', '💓', '💝', '🌸', '🌺', '✨'];
+        
+        setInterval(() => {
+            if (Math.random() < 0.3) {
+                const heart = document.createElement('div');
+                heart.className = 'heart';
+                heart.textContent = hearts[Math.floor(Math.random() * hearts.length)];
+                heart.style.left = Math.random() * 100 + '%';
+                heart.style.animationDuration = (Math.random() * 4 + 6) + 's';
+                heart.style.fontSize = (Math.random() * 10 + 15) + 'px';
                 
-                this.isConnected = false;
-                this.isPlaying = false;
+                heartsContainer.appendChild(heart);
                 
-                this.init();
-                this.createFloatingHearts();
-            }
-            
-            init() {
-                // Event listeners
-                this.connectBtn.addEventListener('click', () => this.toggleConnection());
-                this.streamUrl.addEventListener('keypress', (e) => {
-                    if (e.key === 'Enter') this.toggleConnection();
-                });
-                
-                // Audio events
-                this.audioPlayer.addEventListener('loadstart', () => this.onLoadStart());
-                this.audioPlayer.addEventListener('canplay', () => this.onCanPlay());
-                this.audioPlayer.addEventListener('playing', () => this.onPlaying());
-                this.audioPlayer.addEventListener('pause', () => this.onPause());
-                this.audioPlayer.addEventListener('error', (e) => this.onError(e));
-                this.audioPlayer.addEventListener('ended', () => this.onEnded());
-                
-                // PWA installation
-                this.registerServiceWorker();
-            }
-            
-            createFloatingHearts() {
-                const heartsContainer = document.getElementById('floatingHearts');
-                const hearts = ['💗', '💖', '💕', '💓', '💝', '🌸', '🌺', '✨'];
-                
-                setInterval(() => {
-                    if (Math.random() < 0.3) {
-                        const heart = document.createElement('div');
-                        heart.className = 'heart';
-                        heart.textContent = hearts[Math.floor(Math.random() * hearts.length)];
-                        heart.style.left = Math.random() * 100 + '%';
-                        heart.style.animationDuration = (Math.random() * 4 + 6) + 's';
-                        heart.style.fontSize = (Math.random() * 10 + 15) + 'px';
-                        
-                        heartsContainer.appendChild(heart);
-                        
-                        setTimeout(() => {
-                            if (heartsContainer.contains(heart)) {
-                                heartsContainer.removeChild(heart);
-                            }
-                        }, 10000);
+                setTimeout(() => {
+                    if (heartsContainer.contains(heart)) {
+                        heartsContainer.removeChild(heart);
                     }
-                }, 2000);
+                }, 10000);
             }
-            
-            async toggleConnection() {
-                if (this.isConnected) {
-                    this.disconnect();
-                } else {
-                    await this.connect();
-                }
-            }
-            
-            async connect() {
-                const url = this.streamUrl.value.trim();
-                if (!url) {
-                    this.showStatus('❌ Por favor ingresa una URL válida', 'error');
-                    return;
-                }
-                
-                try {
-                    this.connectBtn.disabled = true;
-                    this.showStatus('🔄 Conectando con tu amor<span class="loading-dots"></span>', 'connecting');
-                    
-                    // Set audio source
-                    this.audioPlayer.src = url;
-                    this.audioPlayer.load();
-                    
-                    // Try to play
-                    const playPromise = this.audioPlayer.play();
-                    if (playPromise !== undefined) {
-                        await playPromise;
-                    }
-                    
-                } catch (error) {
-                    console.error('Connection error:', error);
-                    this.onError(error);
-                }
-            }
-            
-            disconnect() {
-                this.audioPlayer.pause();
-                this.audioPlayer.src = '';
-                this.isConnected = false;
-                this.isPlaying = false;
-                
-                this.connectBtn.textContent = 'Conectar con tu Amor 💕';
-                this.connectBtn.disabled = false;
-                this.showStatus('💝 Lista para recibir tu amor', 'waiting');
-                this.setAvatarState('waiting');
-                this.audioVisualizer.classList.remove('active');
-            }
-            
-            onLoadStart() {
-                this.showStatus('🔄 Preparando la conexión<span class="loading-dots"></span>', 'connecting');
-            }
-            
-            onCanPlay() {
+        }, 2000);
+    }
+    
+    async toggleConnection() {
+        if (this.isConnected) {
+            this.disconnect();
+        } else {
+            await this.connect();
+        }
+    }
+    
+    async connect() {
+        const ipAddress = this.streamUrl.value.trim(); // Usuario introduce solo la IP (ej. 192.168.1.144)
+        const wsPort = 8889; // El puerto del servidor WebSocket en Android
+        
+        if (!ipAddress) {
+            this.showStatus('❌ Por favor ingresa la IP de tu móvil', 'error');
+            return;
+        }
+        
+        // Construye la URL del WebSocket
+        const websocketUrl = `ws://${ipAddress}:${wsPort}`; 
+
+        try {
+            this.connectBtn.disabled = true;
+            this.showStatus('🔄 Conectando con tu amor<span class="loading-dots"></span>', 'connecting');
+
+            // Cierra conexiones anteriores si existen
+            this.disconnect(); // Usa disconnect para limpiar antes de reconectar
+
+            // Crea un nuevo AudioContext
+            this.audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: this.sampleRate });
+            this.gainNode = this.audioContext.createGain(); // Nodo para controlar el volumen
+            this.gainNode.connect(this.audioContext.destination);
+
+            // Crea la conexión WebSocket
+            this.websocket = new WebSocket(websocketUrl);
+            this.websocket.binaryType = 'arraybuffer'; // Importante para recibir datos binarios
+
+            this.websocket.onopen = () => {
                 this.isConnected = true;
                 this.connectBtn.textContent = 'Desconectar 💔';
                 this.connectBtn.disabled = false;
-            }
-            
-            onPlaying() {
-                this.isPlaying = true;
-                this.showStatus('🎶 Recibiendo tu amor...', 'playing');
+                this.showStatus('✅ Conectado. Esperando audio...', 'playing'); 
                 this.setAvatarState('listening');
-                this.audioVisualizer.classList.add('active');
-            }
-            
-            onPause() {
-                if (this.isConnected) {
-                    this.isPlaying = false;
-                    this.showStatus('⏸️ Esperando más amor...', 'waiting');
-                    this.setAvatarState('waiting');
-                    this.audioVisualizer.classList.remove('active');
-                }
-            }
-            
-            onError(error) {
-                console.error('Audio error:', error);
-                this.isConnected = false;
-                this.connectBtn.textContent = 'Reintentar Conexión 🔄';
-                this.connectBtn.disabled = false;
-                this.showStatus('❌ No pude conectar con tu corazón', 'error');
-                this.setAvatarState('sad');
-                this.audioVisualizer.classList.remove('active');
-            }
-            
-            onEnded() {
-                this.showStatus('💔 Se perdió la conexión...', 'error');
-                this.setAvatarState('sad');
-                this.audioVisualizer.classList.remove('active');
-            }
-            
-            showStatus(message, type) {
-                this.statusMessage.innerHTML = message;
-                this.statusMessage.className = `status-message status-${type}`;
-            }
-            
-            setAvatarState(state) {
-                this.avatar.className = `avatar ${state}`;
-            }
-            
-            async registerServiceWorker() {
-                if ('serviceWorker' in navigator) {
-                    try {
-                        // Registrar el Service Worker directamente desde su URL
-                        // Asegúrate de que '/service-worker.js' sea la ruta correcta a tu archivo
-                        await navigator.serviceWorker.register('/service-worker.js'); 
-                        console.log('Service Worker registered successfully');
-                    } catch (error) {
-                        console.error('Service Worker registration failed:', error);
+                this.audioVisualizer.classList.add('active'); // Muestra el visualizador al conectar
+                this.isBuffering = true;
+                this.audioQueue = []; // Limpia la cola al conectar
+            };
+
+            this.websocket.onmessage = async (event) => {
+                if (event.data instanceof ArrayBuffer) {
+                    // console.log(`Received ${event.data.byteLength} bytes`);
+                    this.audioQueue.push(event.data);
+
+                    if (this.isBuffering && this.audioQueue.length >= this.bufferThreshold) {
+                        this.isBuffering = false;
+                        this.processAudioQueue(); // Empieza a procesar y reproducir
+                    } else if (!this.isBuffering) {
+                        // Si ya estamos reproduciendo, solo procesa el siguiente buffer
+                        this.processAudioQueue();
                     }
                 }
+            };
+
+            this.websocket.onclose = () => {
+                console.log('WebSocket closed.');
+                this.disconnect(); // Limpia la UI y el estado
+                this.showStatus('💔 Conexión cerrada', 'error');
+                this.setAvatarState('sad');
+            };
+
+            this.websocket.onerror = (error) => {
+                console.error('WebSocket error:', error);
+                this.onError(new Error('Error de conexión WebSocket'));
+            };
+
+        } catch (error) {
+            console.error('Error al intentar conectar:', error);
+            this.onError(error);
+        }
+    }
+    
+    // --- NUEVA FUNCIÓN PARA PROCESAR LA COLA DE AUDIO ---
+    async processAudioQueue() {
+        if (this.audioQueue.length === 0 || !this.audioContext || this.isBuffering) {
+            return;
+        }
+
+        const audioData = this.audioQueue.shift(); // Saca el primer buffer de la cola
+        
+        try {
+            const audioBuffer = await this.audioContext.decodeAudioData(audioData);
+
+            const source = this.audioContext.createBufferSource();
+            source.buffer = audioBuffer;
+            source.connect(this.gainNode);
+            source.start(0); // Reproduce inmediatamente
+
+            // Si el buffer tiene una duración, planifica la reproducción del siguiente
+            // (esto es clave para el streaming continuo)
+            source.onended = () => {
+                if (this.isConnected && this.audioQueue.length > 0) {
+                    this.processAudioQueue(); // Procesa el siguiente de la cola
+                } else if (this.isConnected && this.audioQueue.length === 0) {
+                    // Si la cola se vacía mientras estamos conectados, es posible que el stream se haya pausado/terminado
+                    // o que haya un retraso en la red. Puedes manejarlo aquí.
+                    this.isBuffering = true; // Empieza a buferizar de nuevo
+                    console.log('Cola de audio vacía. Buffering...');
+                    // this.onPause(); // Opcional: poner en estado de pausa si el stream se detiene por falta de datos
+                }
+            };
+            this.onPlaying(); // Asegúrate de que el estado visual sea "reproduciendo"
+
+        } catch (e) {
+            console.error('Error al decodificar o reproducir audio:', e);
+            this.onError(new Error('Error en el stream de audio'));
+            // Si hay un error, limpia la cola para evitar que se atasque
+            this.audioQueue = [];
+        }
+    }
+
+    disconnect() {
+        if (this.websocket) {
+            this.websocket.close();
+            this.websocket = null;
+        }
+        if (this.audioContext) {
+            this.audioContext.close();
+            this.audioContext = null;
+        }
+        this.isConnected = false;
+        this.isPlaying = false;
+        this.audioQueue = []; // Limpia la cola al desconectar
+        this.isBuffering = false;
+        
+        this.connectBtn.textContent = 'Conectar con tu Amor 💕';
+        this.connectBtn.disabled = false;
+        this.showStatus('💝 Lista para recibir tu amor', 'waiting');
+        this.setAvatarState('waiting');
+        this.audioVisualizer.classList.remove('active');
+    }
+    
+    // Los siguientes métodos (onLoadStart, onCanPlay, onPlaying, onPause, onError, onEnded)
+    // ahora deben ser llamados manualmente según los eventos del WebSocket y la Web Audio API.
+    // El audioPlayer HTML ya no dispara estos eventos directamente.
+
+    // onPlaying se llama cuando un buffer se decodifica y se reproduce
+    // onPause se llamaría si detectas que la cola se vacía y el audio se detiene
+    // onError se llama cuando hay un problema en WebSocket o en la decodificación
+
+    onPlaying() {
+        if (!this.isPlaying) {
+            this.isPlaying = true;
+            this.showStatus('🎶 Recibiendo tu amor...', 'playing');
+            this.setAvatarState('listening');
+            this.audioVisualizer.classList.add('active');
+        }
+    }
+    
+    onPause() {
+        if (this.isConnected && this.isPlaying) { // Asegúrate de que solo se llame si estaba reproduciendo
+            this.isPlaying = false;
+            this.showStatus('⏸️ Esperando más amor...', 'waiting');
+            this.setAvatarState('waiting');
+            this.audioVisualizer.classList.remove('active');
+        }
+    }
+    
+    onError(error) {
+        console.error('Audio/Connection error:', error);
+        this.isConnected = false;
+        this.isPlaying = false;
+        this.audioQueue = []; // Limpia la cola
+        this.isBuffering = false;
+
+        if (this.websocket) {
+            this.websocket.close(); // Asegúrate de cerrar el WebSocket en caso de error
+            this.websocket = null;
+        }
+        if (this.audioContext) {
+            this.audioContext.close();
+            this.audioContext = null;
+        }
+        
+        this.connectBtn.textContent = 'Reintentar Conexión 🔄';
+        this.connectBtn.disabled = false;
+        this.showStatus('❌ No pude conectar con tu corazón', 'error');
+        this.setAvatarState('sad');
+        this.audioVisualizer.classList.remove('active');
+    }
+    
+    // onEnded podría llamarse si el servidor WebSocket cierra la conexión de forma limpia.
+    // En un stream continuo, es más probable que se llame a onPause o onError.
+    onEnded() {
+        this.showStatus('💔 Se perdió la conexión...', 'error');
+        this.setAvatarState('sad');
+        this.audioVisualizer.classList.remove('active');
+        this.disconnect(); // Asegúrate de limpiar todo el estado
+    }
+    
+    showStatus(message, type) {
+        this.statusMessage.innerHTML = message;
+        this.statusMessage.className = `status-message status-${type}`;
+    }
+    
+    setAvatarState(state) {
+        this.avatar.className = `avatar ${state}`;
+    }
+    
+    async registerServiceWorker() {
+        if ('serviceWorker' in navigator) {
+            try {
+                // Registrar el Service Worker directamente desde su URL
+                // Asegúrate de que '/service-worker.js' sea la ruta correcta a tu archivo
+                await navigator.serviceWorker.register('/service-worker.js'); 
+                console.log('Service Worker registered successfully');
+            } catch (error) {
+                console.error('Service Worker registration failed:', error);
             }
         }
+    }
+}
         
         // Initialize the app when DOM is loaded
         document.addEventListener('DOMContentLoaded', () => {
