@@ -576,37 +576,15 @@
             async registerServiceWorker() {
                 if ('serviceWorker' in navigator) {
                     try {
-                        // Create a minimal service worker
-                        const swCode = `
-                            const CACHE_NAME = 'romantic-audio-v1';
-                            const urlsToCache = ['./'];
-                            
-                            self.addEventListener('install', event => {
-                                event.waitUntil(
-                                    caches.open(CACHE_NAME)
-                                        .then(cache => cache.addAll(urlsToCache))
-                                );
-                            });
-                            
-                            self.addEventListener('fetch', event => {
-                                event.respondWith(
-                                    caches.match(event.request)
-                                        .then(response => response || fetch(event.request))
-                                );
-                            });
-                        `;
-                        
-                        const blob = new Blob([swCode], { type: 'application/javascript' });
-                        const swUrl = URL.createObjectURL(blob);
-                        
-                        await navigator.serviceWorker.register(swUrl);
+                        // Registrar el Service Worker directamente desde su URL
+                        // Asegúrate de que '/service-worker.js' sea la ruta correcta a tu archivo
+                        await navigator.serviceWorker.register('/service-worker.js'); 
                         console.log('Service Worker registered successfully');
                     } catch (error) {
-                        console.log('Service Worker registration failed:', error);
+                        console.error('Service Worker registration failed:', error);
                     }
                 }
             }
-        }
         
         // Initialize the app when DOM is loaded
         document.addEventListener('DOMContentLoaded', () => {
@@ -651,5 +629,6 @@
             }, 5000);
         });
     </script>
+    <script src="service-worker.js"></script>
 </body>
 </html>
