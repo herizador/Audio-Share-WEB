@@ -1,0 +1,20 @@
+{
+  "name": "Escuchando tu Corazon",
+  "short_name": "Audio Amor",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#FFF5F8",
+  "theme_color": "#FFB6C1",
+  "icons": [
+    {
+      "src": "/temp-icon-128.png",
+      "sizes": "128x128",
+      "type": "image/png"
+    },
+    {
+      "src": "/temp-icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}
