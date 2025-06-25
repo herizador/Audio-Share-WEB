@@ -5,16 +5,20 @@ class AudioStreamProcessor extends AudioWorkletProcessor {
         this.isPlaying = false;
         
         // Configuración de buffers
-        this.MAX_QUEUE_SIZE = 40;
-        this.MIN_BUFFER_THRESHOLD = 8;
+        this.MAX_QUEUE_SIZE = 12;     // Buffer más pequeño para menor latencia
+        this.MIN_BUFFER_THRESHOLD = 2; // Comenzar a reproducir más rápido
         
-        // Buffer simple para suavizado
+        // Último valor para suavizado
         this.lastSample = 0;
         
         // Configuración de tasas de muestreo
         this.inputSampleRate = 16000;  // Android sample rate
-        this.outputSampleRate = sampleRate; // Browser sample rate
-        this.resampleRatio = this.outputSampleRate / this.inputSampleRate;
+        this.outputSampleRate = sampleRate; // Browser sample rate (48000)
+        
+        // El ratio ahora es cuántas muestras de salida necesitamos por cada muestra de entrada
+        this.resampleRatio = this.inputSampleRate / this.outputSampleRate;
+        
+        console.log(`Input rate: ${this.inputSampleRate}, Output rate: ${this.outputSampleRate}, Ratio: ${this.resampleRatio}`);
         
         this.port.onmessage = (event) => {
             if (event.data.type === 'audioData') {
@@ -24,9 +28,8 @@ class AudioStreamProcessor extends AudioWorkletProcessor {
                         this.audioQueue.push(processedBuffer);
                     }
                 } else {
-                    while (this.audioQueue.length >= this.MAX_QUEUE_SIZE) {
-                        this.audioQueue.shift();
-                    }
+                    // Si el buffer está lleno, descartar el más antiguo
+                    this.audioQueue.shift();
                     const processedBuffer = this.preprocessBuffer(event.data.buffer);
                     if (processedBuffer) {
                         this.audioQueue.push(processedBuffer);
@@ -61,77 +64,50 @@ class AudioStreamProcessor extends AudioWorkletProcessor {
         }
     }
 
-    // Interpolación lineal simple
-    interpolate(a, b, t) {
-        return a + (b - a) * t;
-    }
-
     process(inputs, outputs, parameters) {
         const output = outputs[0];
         const channel = output[0];
         
         if (!this.isPlaying || this.audioQueue.length < this.MIN_BUFFER_THRESHOLD) {
-            // Fade out suave
-            for (let i = 0; i < channel.length; i++) {
-                this.lastSample *= 0.95;
-                channel[i] = this.lastSample;
-            }
+            channel.fill(0);
             return true;
         }
 
         try {
-            let currentBuffer = this.audioQueue[0];
+            const currentBuffer = this.audioQueue[0];
             if (!currentBuffer) {
-                for (let i = 0; i < channel.length; i++) {
-                    this.lastSample *= 0.95;
-                    channel[i] = this.lastSample;
-                }
+                channel.fill(0);
                 return true;
             }
 
-            const inputLength = currentBuffer.length;
-            const outputLength = channel.length;
-            let needNextBuffer = false;
+            // Procesar el buffer actual
+            let inputIndex = 0;
+            let lastInputSample = this.lastSample;
             
-            for (let i = 0; i < outputLength; i++) {
-                // Calcular la posición en el buffer de entrada
-                const inputPos = i / this.resampleRatio;
-                const inputIndex = Math.floor(inputPos);
+            for (let i = 0; i < channel.length; i++) {
+                // Encontrar qué muestra del buffer de entrada usar
+                inputIndex = Math.floor(i * this.resampleRatio);
                 
-                if (inputIndex >= inputLength - 1) {
-                    needNextBuffer = true;
+                if (inputIndex >= currentBuffer.length) {
+                    // Si necesitamos más muestras del siguiente buffer
+                    this.audioQueue.shift();
+                    this.lastSample = lastInputSample;
                     break;
                 }
                 
-                // Interpolación lineal simple
-                const fraction = inputPos - inputIndex;
-                const sample = this.interpolate(
-                    currentBuffer[inputIndex],
-                    currentBuffer[inputIndex + 1],
-                    fraction
-                );
-                
-                // Suavizado muy ligero con la última muestra
-                const smoothedSample = sample * 0.85 + this.lastSample * 0.15;
-                this.lastSample = smoothedSample;
+                // Usar la muestra directamente, sin interpolación
+                const sample = currentBuffer[inputIndex];
+                lastInputSample = sample;
                 
                 // Aplicar a todos los canales
                 for (let channelIdx = 0; channelIdx < output.length; channelIdx++) {
-                    output[channelIdx][i] = smoothedSample;
+                    output[channelIdx][i] = sample;
                 }
-            }
-            
-            // Si procesamos todo el buffer, lo removemos de la cola
-            if (needNextBuffer) {
-                this.audioQueue.shift();
             }
             
         } catch (error) {
             console.error('Error processing audio frame:', error);
-            for (let i = 0; i < channel.length; i++) {
-                this.lastSample *= 0.95;
-                channel[i] = this.lastSample;
-            }
+            channel.fill(0);
         }
 
         return true;
