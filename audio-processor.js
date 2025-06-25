@@ -16,7 +16,7 @@ class AudioStreamProcessor extends AudioWorkletProcessor {
         
         // Control de tiempo y tasa de procesamiento
         this.lastProcessTime = 0;
-        this.processInterval = 1000 / 48; // ~48 frames por segundo
+        this.processInterval = 1 / 48; // ~48 frames por segundo, en segundos
         
         this.port.onmessage = (event) => {
             if (event.data.type === 'audioData') {
@@ -55,8 +55,7 @@ class AudioStreamProcessor extends AudioWorkletProcessor {
         const output = outputs[0];
         const channel = output[0];
         
-        // Control de tasa de procesamiento
-        const currentTime = performance.now();
+        // Control de tasa de procesamiento usando currentTime
         const timeSinceLastProcess = currentTime - this.lastProcessTime;
         
         if (timeSinceLastProcess < this.processInterval) {
@@ -69,20 +68,18 @@ class AudioStreamProcessor extends AudioWorkletProcessor {
 
         if (this.audioQueue.length < this.MIN_BUFFER_THRESHOLD || !this.isPlaying) {
             if (this.isPlaying && this.audioQueue.length === 0) {
-                const now = currentTime;
-                if (now - this.lastUnderrunTime < 1000) {
+                if (currentTime - this.lastUnderrunTime < 1) {
                     this.underrunCount++;
                     if (this.underrunCount > 2) {
                         // Incremento más gradual del buffer
                         this.MIN_BUFFER_THRESHOLD = Math.min(40, 
                             this.MIN_BUFFER_THRESHOLD + 1);
-                        console.log('Ajustando buffer threshold:', this.MIN_BUFFER_THRESHOLD);
                         this.underrunCount = 0;
                     }
                 } else {
                     this.underrunCount = 0;
                 }
-                this.lastUnderrunTime = now;
+                this.lastUnderrunTime = currentTime;
             }
             
             // Fade out suave al silencio
