@@ -5,65 +5,103 @@ class AudioStreamProcessor extends AudioWorkletProcessor {
         this.audioQueue = [];
         this.isPlaying = false;
         
-        // --- VALORES OPTIMIZADOS PARA MEJOR CALIDAD DE AUDIO ---
-        this.MAX_QUEUE_SIZE = 100;    // Aumentado para asegurar procesamiento completo
-        this.MIN_BUFFER_THRESHOLD = 25;  // Buffer mínimo más alto para estabilidad
-        this.OPTIMAL_BUFFER_SIZE = 50;   // Buffer óptimo aumentado para mejor calidad
+        // --- CONFIGURACIÓN DE AUDIO PARA COMPATIBILIDAD CON APP ---
+        this.appSampleRate = 16000;  // Sample rate de la app
+        this.contextSampleRate = 48000;  // Sample rate típico del contexto
+        this.resampleRatio = this.contextSampleRate / this.appSampleRate;
+        
+        // --- CONFIGURACIÓN DE BUFFERS ---
+        this.MAX_QUEUE_SIZE = 100;    // Buffer máximo para estabilidad
+        this.MIN_BUFFER_THRESHOLD = 25;  // Mínimo para evitar underruns
+        this.OPTIMAL_BUFFER_SIZE = 50;   // Tamaño óptimo para calidad
+        
+        // --- CONTROL DE CALIDAD DE AUDIO ---
+        this.smoothingFactor = 0.82;  // Factor de suavizado para transiciones
+        this.lastSampleValue = 0;     // Último valor para interpolación
+        this.previousFrame = new Float32Array(128).fill(0);  // Frame anterior para crossfade
+        
+        // --- CONTROL DE ESTADO ---
         this.underrunCount = 0;
         this.lastUnderrunTime = 0;
-        this.smoothingFactor = 0.85;  // Suavizado más agresivo
-        this.lastSampleValue = 0;
-        
-        // Variables para control de flujo de audio
-        this.sampleRate = 16000;  // Debe coincidir con la app
-        this.frameSize = 128;     // Tamaño típico de frame en Web Audio
-        this.targetLatency = 0.1; // 100ms de latencia objetivo
-        this.bufferTarget = Math.ceil(this.targetLatency * this.sampleRate / this.frameSize);
+        this.processingStartTime = currentTime;
+        this.totalProcessedFrames = 0;
+        this.expectedNextFrame = 0;
         
         this.port.onmessage = (event) => {
             if (event.data.type === 'audioData') {
                 if (this.audioQueue.length < this.MAX_QUEUE_SIZE) {
-                    // Procesar el buffer antes de agregarlo
-                    const processedBuffer = this.preprocessBuffer(event.data.buffer);
-                    this.audioQueue.push(processedBuffer);
-                    
-                    // Ajuste dinámico del buffer basado en la latencia actual
-                    const currentLatency = (this.audioQueue.length * this.frameSize) / this.sampleRate;
-                    if (currentLatency > this.targetLatency * 1.5) {
-                        // Tenemos demasiada latencia, reducir buffer
-                        while (this.audioQueue.length > this.bufferTarget) {
-                            this.audioQueue.shift();
+                    const processedBuffer = this.preprocessAudioBuffer(event.data.buffer);
+                    if (processedBuffer) {
+                        this.audioQueue.push(processedBuffer);
+                        
+                        // Ajuste dinámico de buffer basado en timing
+                        const bufferHealth = this.calculateBufferHealth();
+                        if (bufferHealth > 1.2) { // Buffer demasiado grande
+                            const excessFrames = Math.floor((bufferHealth - 1) * this.OPTIMAL_BUFFER_SIZE);
+                            if (excessFrames > 0) {
+                                this.audioQueue.splice(0, excessFrames);
+                            }
                         }
                     }
                 } else {
-                    // Si el buffer está lleno, mantener solo los paquetes más recientes
-                    this.audioQueue = this.audioQueue.slice(-this.OPTIMAL_BUFFER_SIZE);
-                    this.audioQueue.push(this.preprocessBuffer(event.data.buffer));
+                    // Mantener buffer fresco descartando frames antiguos
+                    while (this.audioQueue.length >= this.MAX_QUEUE_SIZE) {
+                        this.audioQueue.shift();
+                    }
+                    const processedBuffer = this.preprocessAudioBuffer(event.data.buffer);
+                    if (processedBuffer) {
+                        this.audioQueue.push(processedBuffer);
+                    }
                 }
             } else if (event.data.type === 'play') {
                 this.isPlaying = true;
+                this.processingStartTime = currentTime;
+                this.totalProcessedFrames = 0;
             } else if (event.data.type === 'pause') {
                 this.isPlaying = false;
             } else if (event.data.type === 'stop') {
                 this.isPlaying = false;
                 this.audioQueue = [];
                 this.lastSampleValue = 0;
+                this.previousFrame.fill(0);
+                this.processingStartTime = currentTime;
+                this.totalProcessedFrames = 0;
             }
         };
     }
 
-    preprocessBuffer(buffer) {
-        // Convertir el buffer a Int16Array si no lo es ya
-        const int16 = buffer instanceof Int16Array ? buffer : new Int16Array(buffer);
-        // Pre-procesar para tener samples normalizados
-        const processed = new Float32Array(int16.length);
-        const scale = 1.0 / 32768.0;
-        
-        for (let i = 0; i < int16.length; i++) {
-            processed[i] = int16[i] * scale;
+    preprocessAudioBuffer(buffer) {
+        try {
+            // Convertir buffer a Int16Array si no lo es ya
+            const int16Buffer = buffer instanceof Int16Array ? buffer : new Int16Array(buffer);
+            const float32Buffer = new Float32Array(int16Buffer.length);
+            
+            // Normalización y detección de nivel
+            let maxLevel = 0;
+            for (let i = 0; i < int16Buffer.length; i++) {
+                float32Buffer[i] = int16Buffer[i] / 32768.0;
+                maxLevel = Math.max(maxLevel, Math.abs(float32Buffer[i]));
+            }
+            
+            // Aplicar ganancia si el nivel es muy bajo
+            if (maxLevel < 0.1) {
+                const gain = Math.min(2.0, 0.3 / maxLevel);
+                for (let i = 0; i < float32Buffer.length; i++) {
+                    float32Buffer[i] *= gain;
+                }
+            }
+            
+            return float32Buffer;
+        } catch (error) {
+            console.error('Error preprocessing buffer:', error);
+            return null;
         }
-        
-        return processed;
+    }
+
+    calculateBufferHealth() {
+        const expectedFrames = (currentTime - this.processingStartTime) * this.appSampleRate;
+        const actualFrames = this.totalProcessedFrames;
+        return this.audioQueue.length / this.OPTIMAL_BUFFER_SIZE;
     }
 
     process(inputs, outputs, parameters) {
@@ -75,9 +113,7 @@ class AudioStreamProcessor extends AudioWorkletProcessor {
                 if (currentTime - this.lastUnderrunTime < 1) {
                     this.underrunCount++;
                     if (this.underrunCount > 2) {
-                        // Aumentar buffer gradualmente
-                        this.MIN_BUFFER_THRESHOLD = Math.min(35, 
-                            this.MIN_BUFFER_THRESHOLD + 2);
+                        this.MIN_BUFFER_THRESHOLD = Math.min(35, this.MIN_BUFFER_THRESHOLD + 2);
                         this.underrunCount = 0;
                     }
                 } else {
@@ -86,46 +122,51 @@ class AudioStreamProcessor extends AudioWorkletProcessor {
                 this.lastUnderrunTime = currentTime;
             }
             
-            // Fade out suave
+            // Crossfade al silencio
+            const fadeOutGain = 0.95;
             for (let i = 0; i < channel.length; i++) {
-                this.lastSampleValue *= 0.97;
-                channel[i] = this.lastSampleValue;
+                this.previousFrame[i] *= fadeOutGain;
+                channel[i] = this.previousFrame[i];
             }
             return true;
         }
 
         const currentBuffer = this.audioQueue.shift();
         if (!currentBuffer) {
-            channel.fill(this.lastSampleValue);
+            channel.set(this.previousFrame);
             return true;
         }
 
         try {
-            // Interpolación suave entre muestras
-            const bufferLength = currentBuffer.length;
-            const channelLength = channel.length;
-            const ratio = bufferLength / channelLength;
+            const inputLength = currentBuffer.length;
+            const outputLength = channel.length;
             
-            for (let i = 0; i < channelLength; i++) {
-                const exactIndex = i * ratio;
-                const index1 = Math.floor(exactIndex);
-                const index2 = Math.min(index1 + 1, bufferLength - 1);
-                const fraction = exactIndex - index1;
+            // Procesar audio manteniendo la calidad
+            for (let i = 0; i < outputLength; i++) {
+                // Calcular índice preciso en el buffer de entrada
+                const inputIndex = (i * inputLength / outputLength) | 0;
+                const nextInputIndex = Math.min(inputIndex + 1, inputLength - 1);
+                const fraction = (i * inputLength / outputLength) % 1;
                 
                 // Interpolación lineal entre muestras
-                const sample1 = currentBuffer[index1] || 0;
-                const sample2 = currentBuffer[index2] || 0;
-                const interpolatedValue = sample1 + (sample2 - sample1) * fraction;
+                const currentSample = currentBuffer[inputIndex];
+                const nextSample = currentBuffer[nextInputIndex];
+                const interpolatedSample = currentSample + (nextSample - currentSample) * fraction;
                 
-                // Aplicar suavizado
-                this.lastSampleValue = this.lastSampleValue * this.smoothingFactor + 
-                    interpolatedValue * (1 - this.smoothingFactor);
+                // Aplicar suavizado con el frame anterior
+                const smoothedSample = this.previousFrame[i] * this.smoothingFactor + 
+                                     interpolatedSample * (1 - this.smoothingFactor);
                 
-                channel[i] = this.lastSampleValue;
+                channel[i] = smoothedSample;
+                this.previousFrame[i] = smoothedSample;
             }
-        } catch (e) {
-            console.error('Error processing audio:', e);
-            channel.fill(this.lastSampleValue);
+            
+            this.totalProcessedFrames += inputLength;
+            this.expectedNextFrame = this.totalProcessedFrames;
+            
+        } catch (error) {
+            console.error('Error processing audio frame:', error);
+            channel.set(this.previousFrame);
         }
 
         return true;
