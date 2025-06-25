@@ -6,10 +6,13 @@ class AudioStreamProcessor extends AudioWorkletProcessor {
         this.isPlaying = false;
         
         // --- CONFIGURACIÓN BÁSICA ---
-        this.MAX_QUEUE_SIZE = 50;
-        this.MIN_BUFFER_THRESHOLD = 10;
-        this.smoothingFactor = 0.6;
-        this.lastSample = 0;
+        this.MAX_QUEUE_SIZE = 60;          // Aumentado para más estabilidad
+        this.MIN_BUFFER_THRESHOLD = 15;    // Aumentado para evitar cortes
+        this.smoothingFactor = 0.85;       // Más suavizado
+        
+        // Buffer para interpolación
+        this.previousSamples = new Float32Array(4).fill(0);
+        this.sampleIndex = 0;
         
         // Control de estado
         this.underrunCount = 0;
@@ -36,7 +39,8 @@ class AudioStreamProcessor extends AudioWorkletProcessor {
             } else if (event.data.type === 'stop') {
                 this.isPlaying = false;
                 this.audioQueue = [];
-                this.lastSample = 0;
+                this.previousSamples.fill(0);
+                this.sampleIndex = 0;
             }
         };
     }
@@ -57,6 +61,19 @@ class AudioStreamProcessor extends AudioWorkletProcessor {
         }
     }
 
+    // Interpolación cúbica para suavizar el audio
+    interpolateCubic(x0, x1, x2, x3, t) {
+        const t2 = t * t;
+        const t3 = t2 * t;
+        
+        const a0 = x3 - x2 - x0 + x1;
+        const a1 = x0 - x1 - a0;
+        const a2 = x2 - x0;
+        const a3 = x1;
+        
+        return a0 * t3 + a1 * t2 + a2 * t + a3;
+    }
+
     process(inputs, outputs, parameters) {
         const output = outputs[0];
         const channel = output[0];
@@ -75,39 +92,56 @@ class AudioStreamProcessor extends AudioWorkletProcessor {
                 this.lastUnderrunTime = currentTime;
             }
             
-            // Fade out suave
+            // Fade out suave usando las muestras anteriores
             for (let i = 0; i < channel.length; i++) {
-                this.lastSample *= 0.95;
-                channel[i] = this.lastSample;
+                this.previousSamples[this.sampleIndex % 4] *= 0.95;
+                channel[i] = this.previousSamples[this.sampleIndex % 4];
+                this.sampleIndex++;
             }
             return true;
         }
 
         const currentBuffer = this.audioQueue.shift();
         if (!currentBuffer) {
-            channel.fill(this.lastSample);
+            // Mantener el último estado de audio
+            const lastSample = this.previousSamples[(this.sampleIndex - 1) % 4];
+            channel.fill(lastSample);
             return true;
         }
 
         try {
-            // Procesamiento directo sin remuestreo
             const samplesPerFrame = channel.length;
             const inputLength = currentBuffer.length;
             const skipRatio = inputLength / samplesPerFrame;
             
             for (let i = 0; i < samplesPerFrame; i++) {
-                const inputIndex = Math.min(Math.floor(i * skipRatio), inputLength - 1);
-                const sample = currentBuffer[inputIndex];
+                const position = i * skipRatio;
+                const index = Math.floor(position);
+                const fraction = position - index;
                 
-                // Suavizado simple
-                this.lastSample = this.lastSample * this.smoothingFactor + 
-                                sample * (1 - this.smoothingFactor);
-                channel[i] = this.lastSample;
+                // Obtener 4 puntos para interpolación
+                const x0 = index > 0 ? currentBuffer[index - 1] : this.previousSamples[3];
+                const x1 = currentBuffer[index];
+                const x2 = index + 1 < inputLength ? currentBuffer[index + 1] : x1;
+                const x3 = index + 2 < inputLength ? currentBuffer[index + 2] : x2;
+                
+                // Aplicar interpolación cúbica
+                let sample = this.interpolateCubic(x0, x1, x2, x3, fraction);
+                
+                // Suavizado adicional
+                sample = sample * (1 - this.smoothingFactor) + 
+                        this.previousSamples[this.sampleIndex % 4] * this.smoothingFactor;
+                
+                // Guardar muestra para siguiente iteración
+                this.previousSamples[this.sampleIndex % 4] = sample;
+                channel[i] = sample;
+                this.sampleIndex++;
             }
             
         } catch (error) {
             console.error('Error processing audio frame:', error);
-            channel.fill(this.lastSample);
+            const lastSample = this.previousSamples[(this.sampleIndex - 1) % 4];
+            channel.fill(lastSample);
         }
 
         return true;
