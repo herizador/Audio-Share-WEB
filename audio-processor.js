@@ -5,15 +5,17 @@ class AudioStreamProcessor extends AudioWorkletProcessor {
         this.isPlaying = false;
         
         // Configuración básica
-        this.MAX_QUEUE_SIZE = 30;       // Buffer más pequeño para menor latencia
-        this.MIN_BUFFER_THRESHOLD = 5;   // Umbral bajo para respuesta rápida
+        this.MAX_QUEUE_SIZE = 30;
+        this.MIN_BUFFER_THRESHOLD = 5;
         
-        // Buffer circular para suavizado
+        // Buffer para suavizado
         this.smoothingBuffer = new Float32Array(128);
         this.smoothingBufferIndex = 0;
         
-        // Control de volumen simple
-        this.currentVolume = 1.0;
+        // Configuración de tasas de muestreo
+        this.inputSampleRate = 16000;  // La tasa de muestreo de entrada (Android)
+        this.outputSampleRate = sampleRate; // La tasa de muestreo del navegador
+        this.resampleRatio = this.outputSampleRate / this.inputSampleRate;
         
         this.port.onmessage = (event) => {
             if (event.data.type === 'audioData') {
@@ -40,7 +42,6 @@ class AudioStreamProcessor extends AudioWorkletProcessor {
                 this.audioQueue = [];
                 this.smoothingBuffer.fill(0);
                 this.smoothingBufferIndex = 0;
-                this.currentVolume = 1.0;
             }
         };
     }
@@ -50,7 +51,7 @@ class AudioStreamProcessor extends AudioWorkletProcessor {
             const int16Buffer = buffer instanceof Int16Array ? buffer : new Int16Array(buffer);
             const float32Buffer = new Float32Array(int16Buffer.length);
             
-            // Conversión directa a float32 con normalización simple
+            // Conversión simple de Int16 a Float32
             for (let i = 0; i < int16Buffer.length; i++) {
                 float32Buffer[i] = int16Buffer[i] / 32768.0;
             }
@@ -60,6 +61,11 @@ class AudioStreamProcessor extends AudioWorkletProcessor {
             console.error('Error preprocessing buffer:', error);
             return null;
         }
+    }
+
+    // Interpolación lineal simple
+    interpolate(a, b, t) {
+        return a + (b - a) * t;
     }
 
     process(inputs, outputs, parameters) {
@@ -78,42 +84,47 @@ class AudioStreamProcessor extends AudioWorkletProcessor {
         }
 
         try {
-            // Copiar directamente las muestras, aplicando suavizado simple
-            const outputLength = Math.min(channel.length, currentBuffer.length);
-            for (let i = 0; i < outputLength; i++) {
-                // Obtener la muestra actual
-                let sample = currentBuffer[i];
-                
-                // Aplicar suavizado usando el buffer circular
-                this.smoothingBuffer[this.smoothingBufferIndex] = sample;
-                this.smoothingBufferIndex = (this.smoothingBufferIndex + 1) % this.smoothingBuffer.length;
-                
-                // Calcular el promedio de las últimas muestras para suavizar
-                let sum = 0;
-                for (let j = 0; j < 4; j++) {
-                    const idx = (this.smoothingBufferIndex - j + this.smoothingBuffer.length) % this.smoothingBuffer.length;
-                    sum += this.smoothingBuffer[idx];
-                }
-                sample = sum / 4;
-                
-                // Limitar para evitar distorsión
-                sample = Math.max(-1, Math.min(1, sample));
-                
-                // Aplicar a todos los canales
-                for (let channelIdx = 0; channelIdx < output.length; channelIdx++) {
-                    output[channelIdx][i] = sample;
-                }
-            }
+            // Calcular cuántas muestras necesitamos del buffer de entrada
+            const inputLength = currentBuffer.length;
+            const outputLength = channel.length;
             
-            // Rellenar con ceros si es necesario
-            if (outputLength < channel.length) {
-                for (let i = outputLength; i < channel.length; i++) {
+            for (let i = 0; i < outputLength; i++) {
+                // Calcular la posición exacta en el buffer de entrada
+                const inputPos = i / this.resampleRatio;
+                const inputIndex = Math.floor(inputPos);
+                const fraction = inputPos - inputIndex;
+                
+                // Si estamos dentro del buffer de entrada, interpolar
+                if (inputIndex < inputLength - 1) {
+                    const sample = this.interpolate(
+                        currentBuffer[inputIndex],
+                        currentBuffer[inputIndex + 1],
+                        fraction
+                    );
+                    
+                    // Aplicar suavizado
+                    this.smoothingBuffer[this.smoothingBufferIndex] = sample;
+                    this.smoothingBufferIndex = (this.smoothingBufferIndex + 1) % this.smoothingBuffer.length;
+                    
+                    // Promedio móvil simple para suavizar
+                    let sum = 0;
+                    for (let j = 0; j < 4; j++) {
+                        const idx = (this.smoothingBufferIndex - j + this.smoothingBuffer.length) % this.smoothingBuffer.length;
+                        sum += this.smoothingBuffer[idx];
+                    }
+                    const smoothedSample = sum / 4;
+                    
+                    // Aplicar a todos los canales
+                    for (let channelIdx = 0; channelIdx < output.length; channelIdx++) {
+                        output[channelIdx][i] = smoothedSample;
+                    }
+                } else {
+                    // Si nos quedamos sin muestras, rellenar con ceros
                     for (let channelIdx = 0; channelIdx < output.length; channelIdx++) {
                         output[channelIdx][i] = 0;
                     }
                 }
             }
-            
         } catch (error) {
             console.error('Error processing audio frame:', error);
             channel.fill(0);
