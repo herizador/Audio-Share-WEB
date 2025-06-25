@@ -5,13 +5,19 @@ class AudioStreamProcessor extends AudioWorkletProcessor {
         this.audioQueue = [];
         this.isPlaying = false;
         
-        // Configuración optimizada para audio natural
-        this.MAX_QUEUE_SIZE = 40;      // Reducido para menor latencia
-        this.MIN_BUFFER_THRESHOLD = 8;  // Reducido para respuesta más rápida
-        this.smoothingFactor = 0.2;     // Suavizado mínimo para mantener naturalidad
+        // Configuración para mantener fidelidad y reducir cortes
+        this.MAX_QUEUE_SIZE = 50;       // Aumentado para más estabilidad
+        this.MIN_BUFFER_THRESHOLD = 12;  // Aumentado para evitar cortes
+        this.smoothingFactor = 0.15;     // Reducido para mantener tono original
         
-        // Buffer simple para transiciones
-        this.lastSamples = new Float32Array(2).fill(0);
+        // Buffer para transiciones suaves
+        this.lastSamples = new Float32Array(128).fill(0);
+        this.lastSampleIndex = 0;
+        
+        // Control de frecuencia de muestreo
+        this.inputSampleRate = 16000;  // Sample rate de entrada (app Android)
+        this.outputSampleRate = sampleRate; // Sample rate de salida (contexto)
+        this.resampleRatio = this.inputSampleRate / this.outputSampleRate;
         
         this.port.onmessage = (event) => {
             if (event.data.type === 'audioData') {
@@ -35,6 +41,7 @@ class AudioStreamProcessor extends AudioWorkletProcessor {
                 this.isPlaying = false;
                 this.audioQueue = [];
                 this.lastSamples.fill(0);
+                this.lastSampleIndex = 0;
             }
         };
     }
@@ -44,7 +51,7 @@ class AudioStreamProcessor extends AudioWorkletProcessor {
             const int16Buffer = buffer instanceof Int16Array ? buffer : new Int16Array(buffer);
             const float32Buffer = new Float32Array(int16Buffer.length);
             
-            // Conversión directa manteniendo la fidelidad
+            // Conversión preservando amplitud original
             for (let i = 0; i < int16Buffer.length; i++) {
                 float32Buffer[i] = int16Buffer[i] / 32768.0;
             }
@@ -56,9 +63,13 @@ class AudioStreamProcessor extends AudioWorkletProcessor {
         }
     }
 
-    // Interpolación lineal simple para suavizar transiciones
-    interpolate(a, b, t) {
-        return a + (b - a) * t;
+    // Interpolación lineal mejorada
+    interpolate(samples, position) {
+        const index = Math.floor(position);
+        const fraction = position - index;
+        const current = samples[index] || 0;
+        const next = samples[index + 1] || current;
+        return current + (next - current) * fraction;
     }
 
     process(inputs, outputs, parameters) {
@@ -66,50 +77,55 @@ class AudioStreamProcessor extends AudioWorkletProcessor {
         const channel = output[0];
         
         if (this.audioQueue.length < this.MIN_BUFFER_THRESHOLD || !this.isPlaying) {
-            // Fade out natural
-            const fadeOut = 0.95;
+            // Fade out gradual usando buffer circular
             for (let i = 0; i < channel.length; i++) {
-                this.lastSamples[0] *= fadeOut;
-                channel[i] = this.lastSamples[0];
+                this.lastSamples[this.lastSampleIndex] *= 0.98;
+                channel[i] = this.lastSamples[this.lastSampleIndex];
+                this.lastSampleIndex = (this.lastSampleIndex + 1) % this.lastSamples.length;
             }
             return true;
         }
 
         const currentBuffer = this.audioQueue.shift();
         if (!currentBuffer) {
-            channel.fill(this.lastSamples[0]);
+            // Mantener último estado de audio
+            for (let i = 0; i < channel.length; i++) {
+                channel[i] = this.lastSamples[this.lastSampleIndex];
+                this.lastSampleIndex = (this.lastSampleIndex + 1) % this.lastSamples.length;
+            }
             return true;
         }
 
         try {
-            const samplesPerFrame = channel.length;
             const inputLength = currentBuffer.length;
-            const ratio = inputLength / samplesPerFrame;
+            const outputLength = channel.length;
             
-            for (let i = 0; i < samplesPerFrame; i++) {
-                const exactIndex = i * ratio;
-                const index = Math.floor(exactIndex);
-                const fraction = exactIndex - index;
+            // Ajuste de frecuencia de muestreo para mantener tono original
+            const step = this.resampleRatio;
+            
+            for (let i = 0; i < outputLength; i++) {
+                const inputPosition = i * step;
                 
-                // Obtener muestras para interpolación
-                const currentSample = index < inputLength ? currentBuffer[index] : this.lastSamples[0];
-                const nextSample = index + 1 < inputLength ? currentBuffer[index + 1] : currentSample;
-                
-                // Interpolación simple para suavizar
-                let sample = this.interpolate(currentSample, nextSample, fraction);
+                // Interpolación para el remuestreo
+                let sample = this.interpolate(currentBuffer, inputPosition);
                 
                 // Suavizado mínimo para mantener naturalidad
-                sample = sample * (1 - this.smoothingFactor) + this.lastSamples[0] * this.smoothingFactor;
+                const lastSample = this.lastSamples[this.lastSampleIndex];
+                sample = sample * (1 - this.smoothingFactor) + lastSample * this.smoothingFactor;
                 
-                // Actualizar buffer de transición
-                this.lastSamples[1] = this.lastSamples[0];
-                this.lastSamples[0] = sample;
-                
+                // Actualizar buffer circular
+                this.lastSamples[this.lastSampleIndex] = sample;
                 channel[i] = sample;
+                
+                this.lastSampleIndex = (this.lastSampleIndex + 1) % this.lastSamples.length;
             }
         } catch (error) {
             console.error('Error processing audio frame:', error);
-            channel.fill(this.lastSamples[0]);
+            // Recuperación usando último estado válido
+            for (let i = 0; i < channel.length; i++) {
+                channel[i] = this.lastSamples[this.lastSampleIndex];
+                this.lastSampleIndex = (this.lastSampleIndex + 1) % this.lastSamples.length;
+            }
         }
 
         return true;
