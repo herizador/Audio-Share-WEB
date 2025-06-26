@@ -5,20 +5,19 @@ class AudioStreamProcessor extends AudioWorkletProcessor {
         this.isPlaying = false;
         
         // Configuración de buffers
-        this.MAX_QUEUE_SIZE = 12;     // Buffer más pequeño para menor latencia
-        this.MIN_BUFFER_THRESHOLD = 2; // Comenzar a reproducir más rápido
+        this.MAX_QUEUE_SIZE = 32;
+        this.MIN_BUFFER_THRESHOLD = 4;
         
-        // Último valor para suavizado
-        this.lastSample = 0;
-        
-        // Configuración de tasas de muestreo
+        // Tasas de muestreo y configuración
         this.inputSampleRate = 16000;  // Android sample rate
         this.outputSampleRate = sampleRate; // Browser sample rate (48000)
+        this.resampleRatio = this.outputSampleRate / this.inputSampleRate;
         
-        // Para 48000/16000 = 3, necesitamos repetir cada muestra 3 veces
-        this.upsampleFactor = Math.round(this.outputSampleRate / this.inputSampleRate);
+        // Buffer para interpolación
+        this.previousSample = 0;
+        this.currentSample = 0;
         
-        console.log(`Input rate: ${this.inputSampleRate}, Output rate: ${this.outputSampleRate}, Upsampling factor: ${this.upsampleFactor}`);
+        console.log(`Audio processor initialized - Input: ${this.inputSampleRate}Hz, Output: ${this.outputSampleRate}Hz, Ratio: ${this.resampleRatio}`);
         
         this.port.onmessage = (event) => {
             if (event.data.type === 'audioData') {
@@ -28,7 +27,6 @@ class AudioStreamProcessor extends AudioWorkletProcessor {
                         this.audioQueue.push(processedBuffer);
                     }
                 } else {
-                    // Si el buffer está lleno, descartar el más antiguo
                     this.audioQueue.shift();
                     const processedBuffer = this.preprocessBuffer(event.data.buffer);
                     if (processedBuffer) {
@@ -42,19 +40,22 @@ class AudioStreamProcessor extends AudioWorkletProcessor {
             } else if (event.data.type === 'stop') {
                 this.isPlaying = false;
                 this.audioQueue = [];
-                this.lastSample = 0;
+                this.previousSample = 0;
+                this.currentSample = 0;
             }
         };
     }
 
     preprocessBuffer(buffer) {
         try {
+            // Convertir el buffer a Int16Array si no lo es ya
             const int16Buffer = buffer instanceof Int16Array ? buffer : new Int16Array(buffer);
             const float32Buffer = new Float32Array(int16Buffer.length);
             
-            // Conversión de Int16 a Float32 (-1.0 a 1.0)
+            // Normalizar a rango -1.0 a 1.0 con un factor de escala más conservador
+            const scale = 1.0 / 32768.0;
             for (let i = 0; i < int16Buffer.length; i++) {
-                float32Buffer[i] = int16Buffer[i] / 32768.0;
+                float32Buffer[i] = int16Buffer[i] * scale;
             }
             
             return float32Buffer;
@@ -62,6 +63,11 @@ class AudioStreamProcessor extends AudioWorkletProcessor {
             console.error('Error preprocessing buffer:', error);
             return null;
         }
+    }
+
+    // Interpolación lineal mejorada
+    lerp(a, b, t) {
+        return a + (b - a) * Math.max(0, Math.min(1, t));
     }
 
     process(inputs, outputs, parameters) {
@@ -74,42 +80,54 @@ class AudioStreamProcessor extends AudioWorkletProcessor {
         }
 
         try {
-            const currentBuffer = this.audioQueue[0];
+            let currentBuffer = this.audioQueue[0];
             if (!currentBuffer) {
                 channel.fill(0);
                 return true;
             }
 
-            let outputIndex = 0;
             let inputIndex = 0;
+            let accumulatedTime = 0;
             
-            // Procesar el buffer actual repitiendo cada muestra según el factor de upsampling
-            while (outputIndex < channel.length && inputIndex < currentBuffer.length) {
-                const sample = currentBuffer[inputIndex];
+            // Procesar cada muestra del buffer de salida
+            for (let i = 0; i < channel.length; i++) {
+                // Calcular la posición exacta en el tiempo de entrada
+                accumulatedTime = i / this.resampleRatio;
+                inputIndex = Math.floor(accumulatedTime);
                 
-                // Repetir cada muestra según el factor de upsampling
-                for (let repeat = 0; repeat < this.upsampleFactor && outputIndex < channel.length; repeat++) {
-                    // Aplicar a todos los canales de salida
-                    for (let channelIdx = 0; channelIdx < output.length; channelIdx++) {
-                        output[channelIdx][outputIndex] = sample;
+                if (inputIndex >= currentBuffer.length) {
+                    // Necesitamos el siguiente buffer
+                    this.previousSample = currentBuffer[currentBuffer.length - 1];
+                    this.audioQueue.shift();
+                    currentBuffer = this.audioQueue[0];
+                    if (!currentBuffer) {
+                        // No hay más datos, rellenar con ceros
+                        while (i < channel.length) {
+                            channel[i] = 0;
+                            i++;
+                        }
+                        break;
                     }
-                    outputIndex++;
+                    inputIndex = 0;
+                    accumulatedTime = 0;
                 }
+
+                // Obtener las muestras para interpolar
+                const currentSample = currentBuffer[inputIndex];
+                const nextSample = inputIndex + 1 < currentBuffer.length ? 
+                    currentBuffer[inputIndex + 1] : 
+                    (this.audioQueue[1] ? this.audioQueue[1][0] : currentSample);
+
+                // Calcular la fracción para interpolación
+                const fraction = accumulatedTime - inputIndex;
                 
-                inputIndex++;
-            }
-            
-            // Si hemos usado todo el buffer de entrada, lo removemos de la cola
-            if (inputIndex >= currentBuffer.length) {
-                this.audioQueue.shift();
-            }
-            
-            // Rellenar con ceros si quedan muestras sin procesar
-            while (outputIndex < channel.length) {
+                // Interpolar y aplicar
+                const interpolatedSample = this.lerp(currentSample, nextSample, fraction);
+                
+                // Aplicar a todos los canales de salida
                 for (let channelIdx = 0; channelIdx < output.length; channelIdx++) {
-                    output[channelIdx][outputIndex] = 0;
+                    output[channelIdx][i] = interpolatedSample;
                 }
-                outputIndex++;
             }
             
         } catch (error) {
