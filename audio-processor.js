@@ -5,25 +5,32 @@ class AudioStreamProcessor extends AudioWorkletProcessor {
         // Cola de audio con buffer más grande
         this.pendingBuffers = [];
         this.isPlaying = false;
+        this.currentOffset = 0;
         
         // Configuración de audio
         this.inputSampleRate = 16000;  // Android sample rate
         this.outputSampleRate = sampleRate; // Browser sample rate (48000)
         this.resampleRatio = this.outputSampleRate / this.inputSampleRate; // Debe ser 3
-        this.minBuffers = 2;
-        this.maxBuffers = 50;
+        this.minBuffers = 4;  // Aumentado para tener más margen
+        this.maxBuffers = 10; // Reducido para menor latencia
+        this.inputBufferSize = 320; // Tamaño real del buffer de entrada
+        
+        // Buffer de trabajo para suavizar la salida
+        this.workBuffer = new Float32Array(this.inputBufferSize * 2);
+        this.workBufferFilled = 0;
         
         // Contadores para diagnóstico
         this.buffersReceived = 0;
         this.buffersProcessed = 0;
         this.lastLogTime = Date.now();
+        this.underruns = 0;
         
         console.log(`AudioProcessor Iniciado:
 - Sample Rate Entrada: ${this.inputSampleRate}Hz
 - Sample Rate Salida: ${this.outputSampleRate}Hz
 - Ratio de Remuestreo: ${this.resampleRatio}
-- Tamaño de Buffer Entrada: ${128} muestras
-- Tamaño de Buffer Salida: ${128 * this.resampleRatio} muestras`);
+- Tamaño de Buffer Entrada: ${this.inputBufferSize} muestras
+- Tamaño de Buffer Trabajo: ${this.workBuffer.length} muestras`);
         
         this.port.onmessage = (event) => {
             if (event.data.type === 'audioData') {
@@ -36,8 +43,11 @@ class AudioStreamProcessor extends AudioWorkletProcessor {
 - Buffers en Cola: ${this.pendingBuffers.length}
 - Buffers Recibidos: ${this.buffersReceived}
 - Buffers Procesados: ${this.buffersProcessed}
-- Reproduciendo: ${this.isPlaying}`);
+- Reproduciendo: ${this.isPlaying}
+- Underruns: ${this.underruns}
+- Work Buffer: ${this.workBufferFilled}/${this.workBuffer.length}`);
                     this.lastLogTime = now;
+                    this.underruns = 0;
                 }
             } else if (event.data.type === 'play') {
                 this.isPlaying = true;
@@ -48,8 +58,11 @@ class AudioStreamProcessor extends AudioWorkletProcessor {
             } else if (event.data.type === 'stop') {
                 this.isPlaying = false;
                 this.pendingBuffers = [];
+                this.workBufferFilled = 0;
+                this.currentOffset = 0;
                 this.buffersReceived = 0;
                 this.buffersProcessed = 0;
+                this.underruns = 0;
                 console.log('Reproducción detenida');
             }
         };
@@ -77,11 +90,30 @@ class AudioStreamProcessor extends AudioWorkletProcessor {
             // Mantener la cola en un tamaño razonable
             while (this.pendingBuffers.length > this.maxBuffers) {
                 this.pendingBuffers.shift();
-                console.log('Buffer descartado por overflow');
+                this.buffersProcessed++;
             }
         } catch (error) {
             console.error('Error procesando buffer de audio:', error);
         }
+    }
+
+    fillWorkBuffer() {
+        // Mover datos restantes al inicio del buffer
+        if (this.workBufferFilled > 0 && this.currentOffset > 0) {
+            this.workBuffer.copyWithin(0, this.currentOffset, this.currentOffset + this.workBufferFilled);
+        }
+        
+        // Mientras haya espacio y buffers pendientes
+        while (this.workBufferFilled < this.workBuffer.length && this.pendingBuffers.length > 0) {
+            const nextBuffer = this.pendingBuffers.shift();
+            this.buffersProcessed++;
+            
+            // Copiar al work buffer
+            this.workBuffer.set(nextBuffer, this.workBufferFilled);
+            this.workBufferFilled += nextBuffer.length;
+        }
+        
+        this.currentOffset = 0;
     }
 
     process(inputs, outputs, parameters) {
@@ -89,39 +121,36 @@ class AudioStreamProcessor extends AudioWorkletProcessor {
         const channel = output[0];
         
         // Esperar a tener suficientes buffers antes de empezar
-        if (!this.isPlaying || this.pendingBuffers.length < this.minBuffers) {
+        if (!this.isPlaying || (this.pendingBuffers.length < this.minBuffers && this.workBufferFilled < this.inputBufferSize)) {
             channel.fill(0);
+            if (this.isPlaying) this.underruns++;
             return true;
         }
 
         try {
-            const currentBuffer = this.pendingBuffers[0];
-            if (!currentBuffer || currentBuffer.length === 0) {
-                channel.fill(0);
-                return true;
+            // Rellenar el buffer de trabajo si es necesario
+            if (this.workBufferFilled - this.currentOffset < this.inputBufferSize) {
+                this.fillWorkBuffer();
             }
-
+            
             // Procesar cada muestra del buffer de salida
             for (let i = 0; i < channel.length; i++) {
                 // Calcular la posición en el buffer de entrada
-                const inputPos = i / this.resampleRatio;
+                const inputPos = i / this.resampleRatio + this.currentOffset;
                 const inputIndex = Math.floor(inputPos);
                 
-                if (inputIndex >= currentBuffer.length) {
-                    // Si necesitamos más muestras del siguiente buffer
+                if (inputIndex + 1 >= this.workBufferFilled) {
+                    // No tenemos suficientes muestras
+                    for (let j = i; j < channel.length; j++) {
+                        channel[j] = channel[j - 1] || 0; // Mantener última muestra
+                    }
                     break;
                 }
                 
-                // Obtener la muestra actual y la siguiente para interpolación
-                const sample1 = currentBuffer[inputIndex];
-                const sample2 = inputIndex + 1 < currentBuffer.length ? 
-                              currentBuffer[inputIndex + 1] : 
-                              sample1;
-                
-                // Calcular la fracción para interpolación
+                // Interpolación lineal entre muestras
                 const fraction = inputPos - inputIndex;
-                
-                // Interpolar entre las dos muestras
+                const sample1 = this.workBuffer[inputIndex];
+                const sample2 = this.workBuffer[inputIndex + 1];
                 const interpolatedSample = sample1 + (sample2 - sample1) * fraction;
                 
                 // Aplicar a todos los canales
@@ -130,9 +159,9 @@ class AudioStreamProcessor extends AudioWorkletProcessor {
                 }
             }
             
-            // Remover el buffer procesado
-            this.pendingBuffers.shift();
-            this.buffersProcessed++;
+            // Actualizar offset en el buffer de trabajo
+            this.currentOffset += Math.floor(channel.length / this.resampleRatio);
+            this.workBufferFilled -= this.currentOffset;
             
         } catch (error) {
             console.error('Error en el procesamiento de audio:', error);
