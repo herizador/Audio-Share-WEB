@@ -10,60 +10,42 @@ class AudioStreamProcessor extends AudioWorkletProcessor {
         // Configuración de audio
         this.inputSampleRate = 16000;  // Android sample rate
         this.outputSampleRate = sampleRate; // Browser sample rate (48000)
-        this.resampleRatio = this.outputSampleRate / this.inputSampleRate; // Debe ser 3
+        this.resampleRatio = this.outputSampleRate / this.inputSampleRate;
         this.minBuffers = 3;
         this.maxBuffers = 15;
         this.inputBufferSize = 320;
         this.processingChunkSize = 128;
         
-        // Buffer de trabajo para suavizar la salida
+        // Buffer de trabajo
         this.workBuffer = new Float32Array(this.inputBufferSize * 6);
         this.workBufferFilled = 0;
         
         // Variables para suavizado adaptativo
         this.lastSample = 0;
-        this.smoothingFactor = 0.15;    // Reducido significativamente
-        this.transitionWindow = 8;      // Ventana para detectar transiciones
+        this.smoothingFactor = 0.15;
+        this.transitionWindow = 8;
         this.lastSamples = new Float32Array(this.transitionWindow).fill(0);
         this.lastSampleIndex = 0;
         
-        // Contadores para diagnóstico
+        // Contadores para diagnóstico (solo si debug está activo)
+        this.debug = false; // Debug desactivado por defecto
         this.buffersReceived = 0;
         this.buffersProcessed = 0;
-        this.lastLogTime = Date.now();
+        this.lastLogTime = 0;
         this.underruns = 0;
         this.totalSamplesProcessed = 0;
         
+        // Log inicial de configuración (solo una vez)
         console.log(`AudioProcessor Iniciado:
 - Sample Rate Entrada: ${this.inputSampleRate}Hz
 - Sample Rate Salida: ${this.outputSampleRate}Hz
 - Ratio de Remuestreo: ${this.resampleRatio}
-- Tamaño de Buffer Entrada: ${this.inputBufferSize} muestras
-- Tamaño de Buffer Trabajo: ${this.workBuffer.length} muestras
-- Chunk de Procesamiento: ${this.processingChunkSize} muestras
 - Factor de Suavizado: ${this.smoothingFactor}`);
         
         this.port.onmessage = (event) => {
             if (event.data.type === 'audioData') {
                 this.addAudioData(event.data.buffer);
-                
-                const now = Date.now();
-                if (now - this.lastLogTime >= 1000) {
-                    const samplesPerSecond = this.totalSamplesProcessed;
-                    this.totalSamplesProcessed = 0;
-                    
-                    console.log(`Estado del Audio:
-- Buffers en Cola: ${this.pendingBuffers.length}
-- Buffers Recibidos: ${this.buffersReceived}
-- Buffers Procesados: ${this.buffersProcessed}
-- Reproduciendo: ${this.isPlaying}
-- Underruns: ${this.underruns}
-- Work Buffer: ${this.workBufferFilled}/${this.workBuffer.length}
-- Current Offset: ${this.currentOffset}
-- Muestras/s: ${samplesPerSecond}`);
-                    this.lastLogTime = now;
-                    this.underruns = 0;
-                }
+                this.logMetricsIfDebug();
             } else if (event.data.type === 'play') {
                 this.isPlaying = true;
                 console.log('Reproducción iniciada');
@@ -72,25 +54,56 @@ class AudioStreamProcessor extends AudioWorkletProcessor {
                 console.log('Reproducción pausada');
             } else if (event.data.type === 'stop') {
                 this.isPlaying = false;
-                this.pendingBuffers = [];
-                this.workBufferFilled = 0;
-                this.currentOffset = 0;
-                this.buffersReceived = 0;
-                this.buffersProcessed = 0;
-                this.underruns = 0;
-                this.lastSample = 0;
-                this.lastSamples.fill(0);
-                this.totalSamplesProcessed = 0;
+                this.resetState();
                 console.log('Reproducción detenida');
+            } else if (event.data.type === 'debug') {
+                this.debug = event.data.enabled;
+                console.log(`Modo debug ${this.debug ? 'activado' : 'desactivado'}`);
             }
         };
+    }
+
+    resetState() {
+        this.pendingBuffers = [];
+        this.workBufferFilled = 0;
+        this.currentOffset = 0;
+        this.buffersReceived = 0;
+        this.buffersProcessed = 0;
+        this.underruns = 0;
+        this.lastSample = 0;
+        this.lastSamples.fill(0);
+        this.totalSamplesProcessed = 0;
+    }
+
+    logMetricsIfDebug() {
+        if (!this.debug) return;
+        
+        const now = Date.now();
+        if (now - this.lastLogTime >= 1000) {
+            const metrics = {
+                buffersInQueue: this.pendingBuffers.length,
+                received: this.buffersReceived,
+                processed: this.buffersProcessed,
+                playing: this.isPlaying,
+                underruns: this.underruns,
+                workBuffer: `${this.workBufferFilled}/${this.workBuffer.length}`,
+                offset: this.currentOffset,
+                samplesPerSecond: this.totalSamplesProcessed
+            };
+            
+            console.log('Estado del Audio:', metrics);
+            
+            this.lastLogTime = now;
+            this.underruns = 0;
+            this.totalSamplesProcessed = 0;
+        }
     }
 
     addAudioData(buffer) {
         try {
             const int16Buffer = buffer instanceof Int16Array ? buffer : new Int16Array(buffer);
             
-            if (this.buffersReceived === 0) {
+            if (this.debug && this.buffersReceived === 0) {
                 console.log(`Primer buffer recibido - Tamaño: ${int16Buffer.length} muestras`);
             }
             
@@ -174,7 +187,7 @@ class AudioStreamProcessor extends AudioWorkletProcessor {
                 const inputIndex = Math.floor(inputPos);
                 
                 if (inputIndex + 1 >= this.workBufferFilled) {
-                    const lastSample = this.lastSample * 0.98; // Fade out más suave
+                    const lastSample = this.lastSample * 0.98;
                     for (let j = i; j < channel.length; j++) {
                         for (let channelIdx = 0; channelIdx < output.length; channelIdx++) {
                             output[channelIdx][j] = lastSample;
@@ -202,7 +215,6 @@ class AudioStreamProcessor extends AudioWorkletProcessor {
                                         a1 * Math.pow(fraction, 2) + 
                                         a2 * fraction + a3;
                 
-                // Aplicar a todos los canales
                 for (let channelIdx = 0; channelIdx < output.length; channelIdx++) {
                     output[channelIdx][i] = interpolatedSample;
                 }
