@@ -9,8 +9,9 @@ class AudioStreamProcessor extends AudioWorkletProcessor {
         // Configuración de audio
         this.inputSampleRate = 16000;  // Android sample rate
         this.outputSampleRate = sampleRate; // Browser sample rate (48000)
-        this.minBuffers = 2;  // Mínimo de buffers antes de empezar a reproducir
-        this.maxBuffers = 50; // Máximo de buffers para evitar delay
+        this.resampleRatio = this.outputSampleRate / this.inputSampleRate; // Debe ser 3
+        this.minBuffers = 2;
+        this.maxBuffers = 50;
         
         // Contadores para diagnóstico
         this.buffersReceived = 0;
@@ -20,8 +21,9 @@ class AudioStreamProcessor extends AudioWorkletProcessor {
         console.log(`AudioProcessor Iniciado:
 - Sample Rate Entrada: ${this.inputSampleRate}Hz
 - Sample Rate Salida: ${this.outputSampleRate}Hz
-- Factor de Escala: ${this.inputSampleRate / this.outputSampleRate}
-- Tamaño de Cola: ${this.maxBuffers} buffers`);
+- Ratio de Remuestreo: ${this.resampleRatio}
+- Tamaño de Buffer Entrada: ${128} muestras
+- Tamaño de Buffer Salida: ${128 * this.resampleRatio} muestras`);
         
         this.port.onmessage = (event) => {
             if (event.data.type === 'audioData') {
@@ -66,8 +68,7 @@ class AudioStreamProcessor extends AudioWorkletProcessor {
             // Convertir a Float32Array (-1.0 a 1.0)
             const floatBuffer = new Float32Array(int16Buffer.length);
             for (let i = 0; i < int16Buffer.length; i++) {
-                // Normalización con factor de escala ajustado
-                floatBuffer[i] = (int16Buffer[i] / 32768.0) * 0.95;
+                floatBuffer[i] = int16Buffer[i] / 32768.0;
             }
             
             this.pendingBuffers.push(floatBuffer);
@@ -95,34 +96,37 @@ class AudioStreamProcessor extends AudioWorkletProcessor {
 
         try {
             const currentBuffer = this.pendingBuffers[0];
-            
             if (!currentBuffer || currentBuffer.length === 0) {
                 channel.fill(0);
                 return true;
             }
 
-            // Calcular el factor de remuestreo
-            const scaleFactor = this.inputSampleRate / this.outputSampleRate;
-            const outputLength = channel.length;
-            
-            // Procesar las muestras
-            for (let i = 0; i < outputLength; i++) {
-                const inputIndex = Math.floor(i * scaleFactor);
-                let sample = 0;
+            // Procesar cada muestra del buffer de salida
+            for (let i = 0; i < channel.length; i++) {
+                // Calcular la posición en el buffer de entrada
+                const inputPos = i / this.resampleRatio;
+                const inputIndex = Math.floor(inputPos);
                 
-                if (inputIndex < currentBuffer.length) {
-                    // Interpolación lineal simple entre muestras
-                    const index1 = inputIndex;
-                    const index2 = Math.min(index1 + 1, currentBuffer.length - 1);
-                    const fraction = (i * scaleFactor) - index1;
-                    
-                    sample = currentBuffer[index1] * (1 - fraction) + 
-                            currentBuffer[index2] * fraction;
+                if (inputIndex >= currentBuffer.length) {
+                    // Si necesitamos más muestras del siguiente buffer
+                    break;
                 }
+                
+                // Obtener la muestra actual y la siguiente para interpolación
+                const sample1 = currentBuffer[inputIndex];
+                const sample2 = inputIndex + 1 < currentBuffer.length ? 
+                              currentBuffer[inputIndex + 1] : 
+                              sample1;
+                
+                // Calcular la fracción para interpolación
+                const fraction = inputPos - inputIndex;
+                
+                // Interpolar entre las dos muestras
+                const interpolatedSample = sample1 + (sample2 - sample1) * fraction;
                 
                 // Aplicar a todos los canales
                 for (let channelIdx = 0; channelIdx < output.length; channelIdx++) {
-                    output[channelIdx][i] = sample;
+                    output[channelIdx][i] = interpolatedSample;
                 }
             }
             
