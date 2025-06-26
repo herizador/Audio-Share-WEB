@@ -15,10 +15,10 @@ class AudioStreamProcessor extends AudioWorkletProcessor {
         this.inputSampleRate = 16000;  // Android sample rate
         this.outputSampleRate = sampleRate; // Browser sample rate (48000)
         
-        // El ratio ahora es cuántas muestras de salida necesitamos por cada muestra de entrada
-        this.resampleRatio = this.inputSampleRate / this.outputSampleRate;
+        // Para 48000/16000 = 3, necesitamos repetir cada muestra 3 veces
+        this.upsampleFactor = Math.round(this.outputSampleRate / this.inputSampleRate);
         
-        console.log(`Input rate: ${this.inputSampleRate}, Output rate: ${this.outputSampleRate}, Ratio: ${this.resampleRatio}`);
+        console.log(`Input rate: ${this.inputSampleRate}, Output rate: ${this.outputSampleRate}, Upsampling factor: ${this.upsampleFactor}`);
         
         this.port.onmessage = (event) => {
             if (event.data.type === 'audioData') {
@@ -52,7 +52,7 @@ class AudioStreamProcessor extends AudioWorkletProcessor {
             const int16Buffer = buffer instanceof Int16Array ? buffer : new Int16Array(buffer);
             const float32Buffer = new Float32Array(int16Buffer.length);
             
-            // Conversión simple de Int16 a Float32
+            // Conversión de Int16 a Float32 (-1.0 a 1.0)
             for (let i = 0; i < int16Buffer.length; i++) {
                 float32Buffer[i] = int16Buffer[i] / 32768.0;
             }
@@ -80,29 +80,36 @@ class AudioStreamProcessor extends AudioWorkletProcessor {
                 return true;
             }
 
-            // Procesar el buffer actual
+            let outputIndex = 0;
             let inputIndex = 0;
-            let lastInputSample = this.lastSample;
             
-            for (let i = 0; i < channel.length; i++) {
-                // Encontrar qué muestra del buffer de entrada usar
-                inputIndex = Math.floor(i * this.resampleRatio);
-                
-                if (inputIndex >= currentBuffer.length) {
-                    // Si necesitamos más muestras del siguiente buffer
-                    this.audioQueue.shift();
-                    this.lastSample = lastInputSample;
-                    break;
-                }
-                
-                // Usar la muestra directamente, sin interpolación
+            // Procesar el buffer actual repitiendo cada muestra según el factor de upsampling
+            while (outputIndex < channel.length && inputIndex < currentBuffer.length) {
                 const sample = currentBuffer[inputIndex];
-                lastInputSample = sample;
                 
-                // Aplicar a todos los canales
-                for (let channelIdx = 0; channelIdx < output.length; channelIdx++) {
-                    output[channelIdx][i] = sample;
+                // Repetir cada muestra según el factor de upsampling
+                for (let repeat = 0; repeat < this.upsampleFactor && outputIndex < channel.length; repeat++) {
+                    // Aplicar a todos los canales de salida
+                    for (let channelIdx = 0; channelIdx < output.length; channelIdx++) {
+                        output[channelIdx][outputIndex] = sample;
+                    }
+                    outputIndex++;
                 }
+                
+                inputIndex++;
+            }
+            
+            // Si hemos usado todo el buffer de entrada, lo removemos de la cola
+            if (inputIndex >= currentBuffer.length) {
+                this.audioQueue.shift();
+            }
+            
+            // Rellenar con ceros si quedan muestras sin procesar
+            while (outputIndex < channel.length) {
+                for (let channelIdx = 0; channelIdx < output.length; channelIdx++) {
+                    output[channelIdx][outputIndex] = 0;
+                }
+                outputIndex++;
             }
             
         } catch (error) {
