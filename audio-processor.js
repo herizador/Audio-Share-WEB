@@ -11,18 +11,21 @@ class AudioStreamProcessor extends AudioWorkletProcessor {
         this.inputSampleRate = 16000;  // Android sample rate
         this.outputSampleRate = sampleRate; // Browser sample rate (48000)
         this.resampleRatio = this.outputSampleRate / this.inputSampleRate; // Debe ser 3
-        this.minBuffers = 3;  // Reducido para menor latencia
-        this.maxBuffers = 15; // Aumentado para más estabilidad
-        this.inputBufferSize = 320; // Tamaño real del buffer de entrada
-        this.processingChunkSize = 128; // Tamaño de chunk para procesar
+        this.minBuffers = 3;
+        this.maxBuffers = 15;
+        this.inputBufferSize = 320;
+        this.processingChunkSize = 128;
         
         // Buffer de trabajo para suavizar la salida
-        this.workBuffer = new Float32Array(this.inputBufferSize * 6); // Aumentado para más estabilidad
+        this.workBuffer = new Float32Array(this.inputBufferSize * 6);
         this.workBufferFilled = 0;
         
-        // Variables para suavizado
+        // Variables para suavizado adaptativo
         this.lastSample = 0;
-        this.smoothingFactor = 0.85; // Factor de suavizado para transiciones
+        this.smoothingFactor = 0.15;    // Reducido significativamente
+        this.transitionWindow = 8;      // Ventana para detectar transiciones
+        this.lastSamples = new Float32Array(this.transitionWindow).fill(0);
+        this.lastSampleIndex = 0;
         
         // Contadores para diagnóstico
         this.buffersReceived = 0;
@@ -37,13 +40,13 @@ class AudioStreamProcessor extends AudioWorkletProcessor {
 - Ratio de Remuestreo: ${this.resampleRatio}
 - Tamaño de Buffer Entrada: ${this.inputBufferSize} muestras
 - Tamaño de Buffer Trabajo: ${this.workBuffer.length} muestras
-- Chunk de Procesamiento: ${this.processingChunkSize} muestras`);
+- Chunk de Procesamiento: ${this.processingChunkSize} muestras
+- Factor de Suavizado: ${this.smoothingFactor}`);
         
         this.port.onmessage = (event) => {
             if (event.data.type === 'audioData') {
                 this.addAudioData(event.data.buffer);
                 
-                // Log de diagnóstico cada segundo
                 const now = Date.now();
                 if (now - this.lastLogTime >= 1000) {
                     const samplesPerSecond = this.totalSamplesProcessed;
@@ -76,6 +79,7 @@ class AudioStreamProcessor extends AudioWorkletProcessor {
                 this.buffersProcessed = 0;
                 this.underruns = 0;
                 this.lastSample = 0;
+                this.lastSamples.fill(0);
                 this.totalSamplesProcessed = 0;
                 console.log('Reproducción detenida');
             }
@@ -84,27 +88,36 @@ class AudioStreamProcessor extends AudioWorkletProcessor {
 
     addAudioData(buffer) {
         try {
-            // Convertir el buffer a Int16Array si no lo es ya
             const int16Buffer = buffer instanceof Int16Array ? buffer : new Int16Array(buffer);
             
-            // Log del tamaño del buffer recibido
             if (this.buffersReceived === 0) {
                 console.log(`Primer buffer recibido - Tamaño: ${int16Buffer.length} muestras`);
             }
             
-            // Convertir a Float32Array (-1.0 a 1.0) con suavizado
+            // Convertir a Float32Array con suavizado adaptativo
             const floatBuffer = new Float32Array(int16Buffer.length);
             for (let i = 0; i < int16Buffer.length; i++) {
                 const sample = int16Buffer[i] / 32768.0;
-                // Aplicar suavizado para reducir clics/pops
-                this.lastSample = sample * (1 - this.smoothingFactor) + this.lastSample * this.smoothingFactor;
+                
+                // Detectar transiciones bruscas
+                const avgLastSamples = this.lastSamples.reduce((a, b) => a + b, 0) / this.transitionWindow;
+                const delta = Math.abs(sample - avgLastSamples);
+                
+                // Ajustar factor de suavizado según la transición
+                const dynamicFactor = delta > 0.1 ? 0.05 : this.smoothingFactor;
+                
+                // Aplicar suavizado adaptativo
+                this.lastSample = sample * (1 - dynamicFactor) + this.lastSample * dynamicFactor;
                 floatBuffer[i] = this.lastSample;
+                
+                // Actualizar historial de muestras
+                this.lastSamples[this.lastSampleIndex] = sample;
+                this.lastSampleIndex = (this.lastSampleIndex + 1) % this.transitionWindow;
             }
             
             this.pendingBuffers.push(floatBuffer);
             this.buffersReceived++;
             
-            // Mantener la cola en un tamaño razonable
             while (this.pendingBuffers.length > this.maxBuffers) {
                 this.pendingBuffers.shift();
                 this.buffersProcessed++;
@@ -115,7 +128,6 @@ class AudioStreamProcessor extends AudioWorkletProcessor {
     }
 
     fillWorkBuffer() {
-        // Si el buffer está muy lleno, mover datos no procesados al inicio
         if (this.currentOffset > 0 && this.workBufferFilled > this.currentOffset) {
             const remainingSamples = this.workBufferFilled - this.currentOffset;
             this.workBuffer.copyWithin(0, this.currentOffset, this.workBufferFilled);
@@ -126,7 +138,6 @@ class AudioStreamProcessor extends AudioWorkletProcessor {
             this.currentOffset = 0;
         }
         
-        // Mientras haya espacio y buffers pendientes
         while (this.workBufferFilled < this.workBuffer.length - this.inputBufferSize && 
                this.pendingBuffers.length > 0) {
             const nextBuffer = this.pendingBuffers[0];
@@ -146,7 +157,6 @@ class AudioStreamProcessor extends AudioWorkletProcessor {
         const output = outputs[0];
         const channel = output[0];
         
-        // Esperar a tener suficientes datos
         if (!this.isPlaying || (this.pendingBuffers.length < this.minBuffers && 
             this.workBufferFilled - this.currentOffset < this.processingChunkSize)) {
             channel.fill(0);
@@ -155,21 +165,16 @@ class AudioStreamProcessor extends AudioWorkletProcessor {
         }
 
         try {
-            // Rellenar el buffer de trabajo si es necesario
             if (this.workBufferFilled - this.currentOffset < this.processingChunkSize * 2) {
                 this.fillWorkBuffer();
             }
             
-            // Procesar cada muestra del buffer de salida
             for (let i = 0; i < channel.length; i++) {
-                // Calcular la posición en el buffer de entrada
                 const inputPos = i / this.resampleRatio + this.currentOffset;
                 const inputIndex = Math.floor(inputPos);
                 
-                // Verificar límites
                 if (inputIndex + 1 >= this.workBufferFilled) {
-                    // Mantener última muestra válida con fade out suave
-                    const lastSample = this.lastSample * 0.95;
+                    const lastSample = this.lastSample * 0.98; // Fade out más suave
                     for (let j = i; j < channel.length; j++) {
                         for (let channelIdx = 0; channelIdx < output.length; channelIdx++) {
                             output[channelIdx][j] = lastSample;
@@ -179,23 +184,32 @@ class AudioStreamProcessor extends AudioWorkletProcessor {
                     break;
                 }
                 
-                // Interpolación lineal entre muestras con suavizado
                 const fraction = inputPos - inputIndex;
                 const sample1 = this.workBuffer[inputIndex];
                 const sample2 = this.workBuffer[inputIndex + 1];
-                const interpolatedSample = sample1 + (sample2 - sample1) * fraction;
                 
-                // Suavizar transiciones
-                this.lastSample = interpolatedSample * (1 - this.smoothingFactor) + 
-                                this.lastSample * this.smoothingFactor;
+                // Interpolación cúbica para mejor calidad
+                const sample0 = inputIndex > 0 ? this.workBuffer[inputIndex - 1] : sample1;
+                const sample3 = inputIndex < this.workBufferFilled - 2 ? 
+                               this.workBuffer[inputIndex + 2] : sample2;
+                
+                const a0 = sample3 - sample2 - sample0 + sample1;
+                const a1 = sample0 - sample1 - a0;
+                const a2 = sample2 - sample0;
+                const a3 = sample1;
+                
+                const interpolatedSample = a0 * Math.pow(fraction, 3) + 
+                                        a1 * Math.pow(fraction, 2) + 
+                                        a2 * fraction + a3;
                 
                 // Aplicar a todos los canales
                 for (let channelIdx = 0; channelIdx < output.length; channelIdx++) {
-                    output[channelIdx][i] = this.lastSample;
+                    output[channelIdx][i] = interpolatedSample;
                 }
+                
+                this.lastSample = interpolatedSample;
             }
             
-            // Actualizar offset y contadores
             const samplesProcessed = Math.floor(channel.length / this.resampleRatio);
             this.currentOffset += samplesProcessed;
             this.totalSamplesProcessed += samplesProcessed;
