@@ -1,20 +1,39 @@
 {
-  "name": "Escuchando tu Corazon",
-  "short_name": "Audio Amor",
-  "start_url": "/",
-  "display": "standalone",
-  "background_color": "#FFF5F8",
-  "theme_color": "#FFB6C1",
-  "icons": [
-    {
-      "src": "/temp-icon-128.png",
-      "sizes": "128x128",
-      "type": "image/png"
-    },
-    {
-      "src": "/temp-icon-512.png",
-      "sizes": "512x512",
-      "type": "image/png"
-    }
-  ]
-}
+    "name": "Audio Share Romántico",
+    "short_name": "AudioShare",
+    "description": "Comparte audio en tiempo real con tu pareja",
+    "start_url": "./",
+    "display": "standalone",
+    "background_color": "#ffffff",
+    "theme_color": "#ff69b4",
+    "orientation": "portrait",
+    "icons": [
+        {
+            "src": "/temp-icon-128.png",
+            "sizes": "192x192",
+            "type": "image/png",
+            "purpose": "any maskable"
+        },
+        {
+            "src": "/temp-icon-512.png",
+            "sizes": "512x512",
+            "type": "image/png",
+            "purpose": "any maskable"
+        },
+        {
+            "src": "/apple-touch-icon.png",
+            "sizes": "180x180",
+            "type": "image/png",
+            "purpose": "any"
+        }
+    ],
+    "related_applications": [],
+    "prefer_related_applications": false,
+    "shortcuts": [
+        {
+            "name": "Conectar",
+            "url": "./?action=connect",
+            "description": "Conectar a una sala de audio"
+        }
+    ]
+} 
