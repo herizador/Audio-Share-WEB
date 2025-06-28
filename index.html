@@ -415,6 +415,50 @@
     <audio id="audioPlayer" preload="none" crossorigin="anonymous"></audio>
     
     <script>
+        // Primero definimos el procesador de audio como un módulo
+        const audioWorkletCode = `
+            class AudioStreamProcessor extends AudioWorkletProcessor {
+                constructor() {
+                    super();
+                    this.buffer = [];
+                    this.isPlaying = false;
+                    
+                    this.port.onmessage = (event) => {
+                        if (event.data.type === 'data') {
+                            this.buffer.push(...event.data.audioData);
+                        } else if (event.data.type === 'stop') {
+                            this.buffer = [];
+                            this.isPlaying = false;
+                        } else if (event.data.type === 'pause') {
+                            this.isPlaying = false;
+                        }
+                    };
+                }
+
+                process(inputs, outputs) {
+                    const output = outputs[0];
+                    const channel = output[0];
+                    
+                    if (this.buffer.length >= channel.length) {
+                        const data = this.buffer.splice(0, channel.length);
+                        for (let i = 0; i < channel.length; i++) {
+                            channel[i] = data[i];
+                        }
+                        this.isPlaying = true;
+                    } else if (this.isPlaying) {
+                        // Silencio cuando no hay suficientes datos
+                        for (let i = 0; i < channel.length; i++) {
+                            channel[i] = 0;
+                        }
+                    }
+                    
+                    return true;
+                }
+            }
+
+            registerProcessor('audio-stream-processor', AudioStreamProcessor);
+        `;
+
         class RomanticAudioReceiver {
             constructor() {
                 // Elementos de la UI
@@ -700,6 +744,50 @@
                     } catch (error) {
                         console.error('Service Worker registration failed:', error);
                     }
+                }
+            }
+
+            async initializeAudio() {
+                try {
+                    // Crear AudioContext con la frecuencia de muestreo correcta
+                    this.audioContext = new (window.AudioContext || window.webkitAudioContext)({
+                        sampleRate: this.sampleRate,
+                        latencyHint: 'interactive'
+                    });
+
+                    // Crear un Blob con el código del procesador
+                    const blob = new Blob([audioWorkletCode], { type: 'application/javascript' });
+                    const workletUrl = URL.createObjectURL(blob);
+
+                    // Cargar el módulo del procesador
+                    await this.audioContext.audioWorklet.addModule(workletUrl);
+
+                    // Crear y conectar los nodos
+                    this.audioWorkletNode = new AudioWorkletNode(this.audioContext, 'audio-stream-processor', {
+                        numberOfInputs: 0,
+                        numberOfOutputs: 1,
+                        outputChannelCount: [1], // Mono
+                        processorOptions: {
+                            sampleRate: this.sampleRate
+                        }
+                    });
+
+                    // Crear nodo de ganancia para control de volumen
+                    this.gainNode = this.audioContext.createGain();
+                    this.gainNode.gain.value = 1.0; // Volumen inicial
+
+                    // Conectar los nodos
+                    this.audioWorkletNode.connect(this.gainNode);
+                    this.gainNode.connect(this.audioContext.destination);
+
+                    // Limpiar la URL del Blob
+                    URL.revokeObjectURL(workletUrl);
+
+                    console.log('Audio initialized successfully');
+                    return true;
+                } catch (error) {
+                    console.error('Error initializing audio:', error);
+                    throw error;
                 }
             }
         }
