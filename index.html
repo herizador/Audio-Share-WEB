@@ -433,12 +433,18 @@
                 this.audioContext = null;
                 this.audioWorkletNode = null; // ¡Ahora usaremos AudioWorkletNode!
                 this.gainNode = null;       // Para controlar el volumen (opcional)
-                // La cola de audio ahora residirá en el AudioWorklet
-                // this.audioQueue = []; // ¡Esta línea se elimina de aquí!
-
+                
                 // Configuración de audio (DEBE COINCIDIR CON LA APP ANDROID)
                 this.sampleRate = 16000; // Hz
                 this.numChannels = 1;    // Mono
+                
+                // Variables para detección de desconexión
+                this.lastAudioTimestamp = 0;
+                this.noAudioTimeout = null;
+                this.reconnectAttempts = 0;
+                this.maxReconnectAttempts = 5;
+                this.reconnectDelay = 2000;
+                this.audioTimeoutDuration = 5000; // 5 segundos sin audio = desconexión
                 
                 this.init();
                 this.createFloatingHearts();
@@ -487,74 +493,64 @@
             }
             
             async connect() {
-                const room = this.roomCode.value.trim();
-                if (!room) {
-                    this.showStatus('❌ Por favor ingresa el código de sala', 'error');
-                    return;
-                }
-                const websocketUrl = `wss://proxy-audio-share.onrender.com?role=guest&room=${encodeURIComponent(room)}`;
                 try {
-                    this.connectBtn.disabled = true;
-                    this.showStatus('🔄 Conectando a la sala<span class="loading-dots"></span>', 'connecting');
-                    this.disconnect(); // Limpiar conexiones anteriores
+                    const roomId = this.roomCode.value.trim();
+                    if (!roomId) {
+                        throw new Error('Por favor ingresa un código de sala');
+                    }
 
-                    this.websocket = new WebSocket(websocketUrl);
+                    const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+                    const wsUrl = `${wsProtocol}//proxy-audio-share.onrender.com?role=guest&room=${roomId}`;
+                    
+                    this.websocket = new WebSocket(wsUrl);
+                    
                     this.websocket.binaryType = 'arraybuffer';
+                    
+                    this.websocket.onopen = async () => {
+                        console.log('WebSocket conectado');
+                        this.isConnected = true;
+                        this.reconnectAttempts = 0;
+                        this.startAudioTimeout();
+                        
+                        try {
+                            await this.initializeAudio();
+                            this.connectBtn.textContent = 'Desconectar 💔';
+                            this.connectBtn.disabled = false;
+                            this.showStatus('💖 Conectado y esperando audio...', 'connected');
+                            this.setAvatarState('happy');
+                        } catch (error) {
+                            console.error('Error inicializando audio:', error);
+                            this.onError(error);
+                        }
+                    };
 
-                    // Agregar timeout para verificar si la conexión se establece
-                    const connectionTimeout = setTimeout(() => {
-                        if (this.websocket && this.websocket.readyState !== WebSocket.OPEN) {
-                            this.onError(new Error('No se pudo conectar al servidor'));
+                    this.websocket.onmessage = (event) => {
+                        if (event.data instanceof ArrayBuffer) {
+                            // Actualizar timestamp de último audio recibido
+                            this.lastAudioTimestamp = Date.now();
+                            this.resetAudioTimeout();
+                            
+                            // Procesar audio
+                            const audioData = new Float32Array(event.data);
+                            if (this.audioWorkletNode && this.isConnected) {
+                                this.audioWorkletNode.port.postMessage({
+                                    type: 'data',
+                                    audioData: audioData
+                                });
+                                this.onPlaying();
+                            }
+                        }
+                    };
+
+                    this.websocket.onclose = (event) => {
+                        console.log('WebSocket cerrado:', event.code, event.reason);
+                        if (this.isConnected && this.reconnectAttempts < this.maxReconnectAttempts) {
+                            this.reconnectAttempts++;
+                            this.showStatus(`🔄 Reconectando (intento ${this.reconnectAttempts})...`, 'waiting');
+                            setTimeout(() => this.connect(), this.reconnectDelay);
+                        } else {
                             this.disconnect();
                         }
-                    }, 5000); // 5 segundos de timeout
-
-                    this.websocket.onopen = async () => {
-                        clearTimeout(connectionTimeout);
-                        this.showStatus('🔄 Verificando sala...', 'connecting');
-                    };
-
-                    this.websocket.onmessage = async (event) => {
-                        if (typeof event.data === 'string') {
-                            // Manejar mensajes de estado del proxy
-                            if (event.data.includes('no_host')) {
-                                this.showStatus('❌ No hay nadie transmitiendo en esta sala', 'error');
-                                this.disconnect();
-                                return;
-                            }
-                            if (event.data.includes('host_disconnected')) {
-                                this.showStatus('💔 El host se desconectó', 'error');
-                                this.disconnect();
-                                return;
-                            }
-                            if (event.data.includes('Conectado como INVITADO')) {
-                                // Inicializar AudioContext solo cuando la sala está verificada
-                                await this.initializeAudio();
-                        this.isConnected = true;
-                        this.connectBtn.textContent = 'Desconectar 💔';
-                        this.connectBtn.disabled = false;
-                        this.showStatus('✅ Conectado. Esperando audio...', 'playing'); 
-                        this.setAvatarState('listening');
-                        this.audioVisualizer.classList.add('active');
-                            }
-                        } else if (event.data instanceof ArrayBuffer && this.audioWorkletNode) {
-                            this.audioWorkletNode.port.postMessage({ 
-                                type: 'audioData', 
-                                buffer: event.data 
-                            });
-                            this.onPlaying();
-                        }
-                    };
-
-                    this.websocket.onclose = () => {
-                        console.log('WebSocket closed.');
-                        this.disconnect();
-                        if (!this.isConnected) {
-                            this.showStatus('❌ No se pudo conectar a la sala', 'error');
-                        } else {
-                        this.showStatus('💔 Conexión cerrada', 'error');
-                        }
-                        this.setAvatarState('sad');
                     };
 
                     this.websocket.onerror = (error) => {
@@ -568,40 +564,37 @@
                 }
             }
             
-            // Nuevo método para inicializar el audio
-            async initializeAudio() {
-                try {
-                    // Intentar crear AudioContext con 16kHz, pero aceptar la tasa nativa si no es posible
-                    this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
-                    console.log(`AudioContext sampleRate: ${this.audioContext.sampleRate}`);
-                    
-                    await this.audioContext.audioWorklet.addModule('audio-processor.js');
-                    this.audioWorkletNode = new AudioWorkletNode(this.audioContext, 'audio-processor', {
-                        numberOfInputs: 0,
-                        numberOfOutputs: 1,
-                        outputChannelCount: [1]  // Forzar salida mono
-                    });
-                    
-                    // Crear un nodo de ganancia para control de volumen
-                    this.gainNode = this.audioContext.createGain();
-                    this.gainNode.gain.value = 1.0; // Volumen inicial
-                    
-                    // Conectar los nodos
-                    this.audioWorkletNode.connect(this.gainNode);
-                    this.gainNode.connect(this.audioContext.destination);
-
-                    if (this.audioContext.state === 'suspended') {
-                        await this.audioContext.resume();
+            startAudioTimeout() {
+                this.resetAudioTimeout();
+                this.noAudioTimeout = setInterval(() => {
+                    const now = Date.now();
+                    if (now - this.lastAudioTimestamp > this.audioTimeoutDuration) {
+                        console.log('No se ha recibido audio por', this.audioTimeoutDuration, 'ms');
+                        if (this.isConnected) {
+                            this.onPause();
+                            // Si no hay audio por mucho tiempo, intentar reconectar
+                            if (this.reconnectAttempts < this.maxReconnectAttempts) {
+                                this.disconnect();
+                                this.connect();
+                            }
+                        }
                     }
-                    this.isPlaying = true;
-                    this.audioWorkletNode.port.postMessage({ type: 'play' });
-                } catch (error) {
-                    console.error('Error inicializando audio:', error);
-                    throw error;
+                }, 1000);
+            }
+            
+            resetAudioTimeout() {
+                if (this.noAudioTimeout) {
+                    clearInterval(this.noAudioTimeout);
                 }
+                this.lastAudioTimestamp = Date.now();
             }
 
             disconnect() {
+                this.resetAudioTimeout();
+                if (this.noAudioTimeout) {
+                    clearInterval(this.noAudioTimeout);
+                    this.noAudioTimeout = null;
+                }
                 if (this.websocket) {
                     this.websocket.close();
                     this.websocket = null;
@@ -622,7 +615,6 @@
                 }
                 this.isConnected = false;
                 this.isPlaying = false;
-                // this.audioQueue = []; // ¡Esta línea se elimina de aquí!
                 
                 this.connectBtn.textContent = 'Conectar a la sala 💕';
                 this.connectBtn.disabled = false;
@@ -658,8 +650,7 @@
                 console.error('Audio/Connection error:', error);
                 this.isConnected = false;
                 this.isPlaying = false;
-                // this.audioQueue = []; // ¡Esta línea se elimina de aquí!
-
+                
                 if (this.websocket && this.websocket.readyState === WebSocket.OPEN) {
                     this.websocket.close(); 
                     this.websocket = null;
