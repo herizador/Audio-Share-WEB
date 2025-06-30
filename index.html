@@ -617,6 +617,14 @@
                         clearTimeout(connectionTimeout);
                         console.log('WebSocket cerrado:', event.code, event.reason);
                         
+                        // Si el código es 1005 y no hay razón específica, probablemente la sala no existe
+                        if (event.code === 1005 && !event.reason) {
+                            this.onError(new Error('La sala no existe o ha sido cerrada'));
+                            this.disconnect();
+                            return;
+                        }
+                        
+                        // Solo intentar reconectar si la sala existía previamente
                         if (this.isConnected && this.reconnectAttempts < this.maxReconnectAttempts) {
                             this.reconnectAttempts++;
                             this.showStatus(`🔄 Reconectando (intento ${this.reconnectAttempts})...`, 'waiting');
@@ -744,9 +752,15 @@
                     });
                 }
                 
-                this.connectBtn.textContent = 'Reintentar Conexión 🔄';
+                // Personalizar el mensaje según el tipo de error
+                if (error.message.includes('sala no existe')) {
+                    this.connectBtn.textContent = 'Conectar a la sala 💕';
+                    this.showStatus('❌ Esta sala no existe o ha sido cerrada', 'error');
+                } else {
+                    this.connectBtn.textContent = 'Reintentar Conexión 🔄';
+                    this.showStatus('❌ No pude conectar con tu corazón', 'error');
+                }
                 this.connectBtn.disabled = false;
-                this.showStatus('❌ No pude conectar con tu corazón', 'error');
                 this.setAvatarState('sad');
                 this.audioVisualizer.classList.remove('active');
             }
