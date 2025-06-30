@@ -617,14 +617,16 @@
                         clearTimeout(connectionTimeout);
                         console.log('WebSocket cerrado:', event.code, event.reason);
                         
-                        // Si el código es 1005 y no hay razón específica, probablemente la sala no existe
-                        if (event.code === 1005 && !event.reason) {
-                            this.onError(new Error('La sala no existe o ha sido cerrada'));
+                        // Si nunca recibimos datos de audio después de conectar, probablemente la sala no existe
+                        const noAudioReceived = Date.now() - this.lastAudioTimestamp > 5000;
+                        
+                        if (this.isConnected && noAudioReceived) {
+                            this.onError(new Error('No se recibió audio - La sala podría no existir o estar inactiva'));
                             this.disconnect();
                             return;
                         }
                         
-                        // Solo intentar reconectar si la sala existía previamente
+                        // Si estábamos conectados y recibiendo audio, intentar reconectar
                         if (this.isConnected && this.reconnectAttempts < this.maxReconnectAttempts) {
                             this.reconnectAttempts++;
                             this.showStatus(`🔄 Reconectando (intento ${this.reconnectAttempts})...`, 'waiting');
@@ -672,7 +674,7 @@
                 this.lastAudioTimestamp = Date.now();
             }
 
-            disconnect() {
+            async disconnect() {
                 this.resetAudioTimeout();
                 if (this.noAudioTimeout) {
                     clearInterval(this.noAudioTimeout);
@@ -682,20 +684,20 @@
                     this.websocket.close();
                     this.websocket = null;
                 }
-                if (this.audioWorkletNode) { // ¡Desconectar el AudioWorkletNode!
+                if (this.audioWorkletNode) {
                     this.audioWorkletNode.disconnect();
-                    // ¡NUEVO! Enviar comando de stop al worklet para que limpie su cola
                     this.audioWorkletNode.port.postMessage({ type: 'stop' });
                     this.audioWorkletNode = null;
                 }
-                if (this.audioContext) {
-                    this.audioContext.close().then(() => {
-                        this.audioContext = null;
-                        console.log('AudioContext closed.');
-                    }).catch(e => {
-                        console.error("Error closing AudioContext:", e);
-                    });
+                if (this.audioContext && this.audioContext.state !== 'closed') {
+                    try {
+                        await this.audioContext.close();
+                        console.log('AudioContext closed successfully');
+                    } catch (e) {
+                        console.log('AudioContext ya estaba cerrado');
+                    }
                 }
+                this.audioContext = null;
                 this.isConnected = false;
                 this.isPlaying = false;
                 
@@ -729,31 +731,35 @@
                 }
             }
             
-            onError(error) {
+            async onError(error) {
                 console.error('Audio/Connection error:', error);
                 this.isConnected = false;
                 this.isPlaying = false;
-                
+
                 if (this.websocket && this.websocket.readyState === WebSocket.OPEN) {
                     this.websocket.close(); 
                     this.websocket = null;
                 }
                 if (this.audioWorkletNode) {
                     this.audioWorkletNode.disconnect();
-                    this.audioWorkletNode.port.postMessage({ type: 'stop' }); // Detener worklet
+                    this.audioWorkletNode.port.postMessage({ type: 'stop' });
                     this.audioWorkletNode = null;
                 }
-                if (this.audioContext) {
-                    this.audioContext.close().then(() => {
-                        this.audioContext = null;
-                        console.log('AudioContext closed.');
-                    }).catch(e => {
-                        console.error("Error closing AudioContext:", e);
-                    });
+                if (this.audioContext && this.audioContext.state !== 'closed') {
+                    try {
+                        await this.audioContext.close();
+                        console.log('AudioContext closed successfully');
+                    } catch (e) {
+                        console.log('AudioContext ya estaba cerrado');
+                    }
                 }
-                
+                this.audioContext = null;
+
                 // Personalizar el mensaje según el tipo de error
-                if (error.message.includes('sala no existe')) {
+                if (error.message.includes('No se recibió audio')) {
+                    this.connectBtn.textContent = 'Conectar a la sala 💕';
+                    this.showStatus('❌ No hay transmisión de audio en esta sala', 'error');
+                } else if (error.message.includes('sala no existe')) {
                     this.connectBtn.textContent = 'Conectar a la sala 💕';
                     this.showStatus('❌ Esta sala no existe o ha sido cerrada', 'error');
                 } else {
