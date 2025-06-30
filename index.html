@@ -538,20 +538,40 @@
             
             async connect() {
                 try {
-                    const roomId = this.roomCode.value.trim();
+                    const roomId = this.roomCode.value.trim().toUpperCase();
                     if (!roomId) {
                         throw new Error('Por favor ingresa un código de sala');
                     }
 
-                    const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-                    const wsUrl = `${wsProtocol}//proxy-audio-share.onrender.com?role=guest&room=${roomId}`;
+                    // Mostrar estado de conexión
+                    this.showStatus('🔄 Conectando...', 'connecting');
+                    this.connectBtn.disabled = true;
+
+                    // Construir URL del WebSocket (corregida)
+                    const wsUrl = `wss://proxy-audio-share.onrender.com/ws?role=guest&room=${roomId}`;
+                    console.log('Intentando conectar a:', wsUrl);
+
+                    // Cerrar WebSocket existente si hay uno
+                    if (this.websocket) {
+                        this.websocket.close();
+                        this.websocket = null;
+                    }
                     
                     this.websocket = new WebSocket(wsUrl);
-                    
                     this.websocket.binaryType = 'arraybuffer';
-                    
+
+                    // Timeout para la conexión
+                    const connectionTimeout = setTimeout(() => {
+                        if (this.websocket && this.websocket.readyState !== WebSocket.OPEN) {
+                            console.log('Timeout de conexión');
+                            this.websocket.close();
+                            this.onError(new Error('Tiempo de espera agotado al conectar'));
+                        }
+                    }, 10000); // 10 segundos de timeout
+
                     this.websocket.onopen = async () => {
                         console.log('WebSocket conectado');
+                        clearTimeout(connectionTimeout);
                         this.isConnected = true;
                         this.reconnectAttempts = 0;
                         this.startAudioTimeout();
@@ -570,16 +590,23 @@
 
                     this.websocket.onmessage = (event) => {
                         if (event.data instanceof ArrayBuffer) {
-                            // Actualizar timestamp de último audio recibido
+                            // Convertir ArrayBuffer a Float32Array
+                            const view = new DataView(event.data);
+                            const floatArray = new Float32Array(event.data.byteLength / 2);
+                            
+                            for (let i = 0; i < floatArray.length; i++) {
+                                // Convertir de Int16 a Float32
+                                const int16Value = view.getInt16(i * 2, true);
+                                floatArray[i] = int16Value / 32768.0;
+                            }
+                            
                             this.lastAudioTimestamp = Date.now();
                             this.resetAudioTimeout();
                             
-                            // Procesar audio
-                            const audioData = new Float32Array(event.data);
                             if (this.audioWorkletNode && this.isConnected) {
-                                this.audioWorkletNode.port.postMessage({
+                                this.audioWorkletNode.port.postMessage({ 
                                     type: 'data',
-                                    audioData: audioData
+                                    audioData: floatArray
                                 });
                                 this.onPlaying();
                             }
@@ -587,7 +614,9 @@
                     };
 
                     this.websocket.onclose = (event) => {
+                        clearTimeout(connectionTimeout);
                         console.log('WebSocket cerrado:', event.code, event.reason);
+                        
                         if (this.isConnected && this.reconnectAttempts < this.maxReconnectAttempts) {
                             this.reconnectAttempts++;
                             this.showStatus(`🔄 Reconectando (intento ${this.reconnectAttempts})...`, 'waiting');
@@ -598,6 +627,7 @@
                     };
 
                     this.websocket.onerror = (error) => {
+                        clearTimeout(connectionTimeout);
                         console.error('WebSocket error:', error);
                         this.onError(new Error('Error de conexión'));
                     };
@@ -605,6 +635,7 @@
                 } catch (error) {
                     console.error('Error al intentar conectar:', error);
                     this.onError(error);
+                    this.connectBtn.disabled = false;
                 }
             }
             
