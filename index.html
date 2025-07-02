@@ -471,13 +471,14 @@
                 // Estado de la conexión y reproducción
                 this.isConnected = false;
                 this.isPlaying = false;
+                this.manualDisconnect = false;  // Nueva bandera para desconexión manual
                 
                 // --- PROPIEDADES PARA WEB AUDIO API Y WEBSOCKET (ACTUALIZADAS) ---
                 this.websocket = null;
                 this.audioContext = null;
                 this.audioWorkletNode = null; // ¡Ahora usaremos AudioWorkletNode!
                 this.gainNode = null;       // Para controlar el volumen (opcional)
-                
+
                 // Configuración de audio (DEBE COINCIDIR CON LA APP ANDROID)
                 this.sampleRate = 16000; // Hz
                 this.numChannels = 1;    // Mono
@@ -530,8 +531,10 @@
             
             async toggleConnection() {
                 if (this.isConnected) {
-                    this.disconnect();
+                    this.manualDisconnect = true;  // Marcar como desconexión manual
+                    await this.disconnect();
                 } else {
+                    this.manualDisconnect = false;  // Resetear la bandera al conectar
                     await this.connect();
                 }
             }
@@ -547,7 +550,7 @@
                     this.showStatus('🔄 Conectando...', 'connecting');
                     this.connectBtn.disabled = true;
 
-                    // Construir URL del WebSocket (corregida)
+                    // Construir URL del WebSocket
                     const wsUrl = `wss://proxy-audio-share.onrender.com/ws?role=guest&room=${roomId}`;
                     console.log('Intentando conectar a:', wsUrl);
 
@@ -567,25 +570,25 @@
                             this.websocket.close();
                             this.onError(new Error('Tiempo de espera agotado al conectar'));
                         }
-                    }, 10000); // 10 segundos de timeout
+                    }, 10000);
 
                     this.websocket.onopen = async () => {
-                        console.log('WebSocket conectado');
                         clearTimeout(connectionTimeout);
+                        console.log('WebSocket conectado');
                         this.isConnected = true;
                         this.reconnectAttempts = 0;
                         this.startAudioTimeout();
                         
                         try {
                             await this.initializeAudio();
-                            this.connectBtn.textContent = 'Desconectar 💔';
-                            this.connectBtn.disabled = false;
+                        this.connectBtn.textContent = 'Desconectar 💔';
+                        this.connectBtn.disabled = false;
                             this.showStatus('💖 Conectado y esperando audio...', 'connected');
                             this.setAvatarState('happy');
                         } catch (error) {
                             console.error('Error inicializando audio:', error);
                             this.onError(error);
-                        }
+                            }
                     };
 
                     this.websocket.onmessage = (event) => {
@@ -604,12 +607,12 @@
                             this.resetAudioTimeout();
                             
                             if (this.audioWorkletNode && this.isConnected) {
-                                this.audioWorkletNode.port.postMessage({ 
+                            this.audioWorkletNode.port.postMessage({ 
                                     type: 'data',
                                     audioData: floatArray
-                                });
-                                this.onPlaying();
-                            }
+                            });
+                            this.onPlaying();
+                        }
                         }
                     };
 
@@ -622,12 +625,12 @@
                         
                         if (this.isConnected && noAudioReceived) {
                             this.onError(new Error('No se recibió audio - La sala podría no existir o estar inactiva'));
-                            this.disconnect();
+                        this.disconnect();
                             return;
                         }
                         
-                        // Si estábamos conectados y recibiendo audio, intentar reconectar
-                        if (this.isConnected && this.reconnectAttempts < this.maxReconnectAttempts) {
+                        // Solo intentar reconectar si no fue una desconexión manual y estábamos conectados
+                        if (this.isConnected && !this.manualDisconnect && this.reconnectAttempts < this.maxReconnectAttempts) {
                             this.reconnectAttempts++;
                             this.showStatus(`🔄 Reconectando (intento ${this.reconnectAttempts})...`, 'waiting');
                             setTimeout(() => this.connect(), this.reconnectDelay);
@@ -670,7 +673,7 @@
             resetAudioTimeout() {
                 if (this.noAudioTimeout) {
                     clearInterval(this.noAudioTimeout);
-                }
+                    }
                 this.lastAudioTimestamp = Date.now();
             }
 
@@ -700,6 +703,7 @@
                 this.audioContext = null;
                 this.isConnected = false;
                 this.isPlaying = false;
+                this.reconnectAttempts = 0;  // Resetear intentos de reconexión
                 
                 this.connectBtn.textContent = 'Conectar a la sala 💕';
                 this.connectBtn.disabled = false;
@@ -763,7 +767,7 @@
                     this.connectBtn.textContent = 'Conectar a la sala 💕';
                     this.showStatus('❌ Esta sala no existe o ha sido cerrada', 'error');
                 } else {
-                    this.connectBtn.textContent = 'Reintentar Conexión 🔄';
+                this.connectBtn.textContent = 'Reintentar Conexión 🔄';
                     this.showStatus('❌ No pude conectar con tu corazón', 'error');
                 }
                 this.connectBtn.disabled = false;
